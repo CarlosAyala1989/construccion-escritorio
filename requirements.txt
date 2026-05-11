@@ -1,0 +1,5 @@
+Eel>=0.16.0
+pytesseract>=0.3.10
+opencv-python>=4.8.0.76
+pycryptodome>=3.18.0
+requests>=2.31.0
