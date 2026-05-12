@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Corrección Manual — Gobernanza Documental</title>
+    <script type="text/javascript" src="/eel.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f3f4f6; color: #1f2937; font-size: 14px; padding: 20px; }
+        .card { background: white; border-radius: 8px; border: 1px solid #e5e7eb; padding: 20px; max-width: 600px; margin: 20px auto; }
+        h2 { font-size: 16px; margin-bottom: 12px; }
+        p { font-size: 12px; color: #6b7280; margin-bottom: 12px; }
+        .form-group { margin-bottom: 12px; }
+        .form-group label { display: block; font-size: 12px; font-weight: 500; color: #374151; margin-bottom: 4px; }
+        .form-group input { width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 13px; }
+        .btn { padding: 8px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; }
+        .btn-primary { background: #4f46e5; color: white; }
+        .btn-primary:hover { background: #4338ca; }
+        .alert { padding: 10px; border-radius: 6px; font-size: 12px; margin-bottom: 12px; }
+        .alert-error { background: #fef2f2; color: #991b1b; }
+        .alert-success { background: #f0fdf4; color: #166534; }
+        .alert-info { background: #eff6ff; color: #1e40af; }
+        .file-info { background: #f9fafb; padding: 10px; border-radius: 6px; margin-bottom: 12px; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>📝 Corrección Manual de Documento</h2>
+        <p>La IA no pudo clasificar este documento automáticamente. Corrige el nombre y será re-evaluado por el Escudo de Privacidad.</p>
+
+        <div class="alert alert-info">
+            ⚠️ Al enviar, el documento pasará nuevamente por el motor de seguridad para asegurar que la encriptación se aplique correctamente.
+        </div>
+
+        <div class="file-info">
+            <strong>Archivo original:</strong> <span id="originalName">—</span><br>
+            <strong>Error:</strong> <span id="errorMessage">—</span>
+        </div>
+
+        <div id="resultMessage" class="hidden"></div>
+
+        <form onsubmit="handleCorrection(event)">
+            <div class="form-group">
+                <label>Nuevo Nombre de Archivo (con extensión)</label>
+                <input type="text" id="newFileName" required placeholder="PROY-001_Contabilidad_2024.pdf">
+            </div>
+            <button type="submit" class="btn btn-primary">Enviar Corrección</button>
+        </form>
+    </div>
+
+    <script>
+        // Get doc info from URL params
+        const params = new URLSearchParams(window.location.search);
+        const docId = params.get('id');
+        const originalName = params.get('name');
+        const error = params.get('error');
+
+        document.getElementById('originalName').textContent = originalName || '—';
+        document.getElementById('errorMessage').textContent = error || '—';
+
+        async function handleCorrection(e) {
+            e.preventDefault();
+            const newName = document.getElementById('newFileName').value.trim();
+            if (!newName) return;
+
+            const result = await eel.correct_document(docId, newName)();
+            const msgEl = document.getElementById('resultMessage');
+            msgEl.classList.remove('hidden');
+
+            if (result.success) {
+                msgEl.className = 'alert alert-success';
+                msgEl.textContent = '✅ Documento corregido y re-evaluado exitosamente.';
+                setTimeout(() => window.close(), 2000);
+            } else {
+                msgEl.className = 'alert alert-error';
+                msgEl.textContent = '❌ ' + (result.error || 'Error al corregir.');
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,337 @@
+/**
+ * App.js — Lógica principal de la interfaz de escritorio.
+ * Manejo del DOM, navegación entre pantallas, y comunicación con Python vía Eel.
+ */
+
+// ─── State ────────────────────────────────────────────
+let selectedWorkspaceId = null;
+let selectedWorkspaceName = null;
+let sessionActive = false;
+let refreshInterval = null;
+
+// ─── Init ─────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', async () => {
+    await checkStatus();
+    // Check if already logged in
+    const user = await eel.get_current_user()();
+    if (user) {
+        showDashboard(user);
+    }
+});
+
+// ─── Status Check ─────────────────────────────────────
+async function checkStatus() {
+    try {
+        const status = await eel.get_app_status()();
+        const badge = document.getElementById('statusBadge');
+        if (status.online) {
+            badge.textContent = 'Conectado';
+            badge.className = 'status-badge status-online';
+        } else {
+            badge.textContent = 'Sin conexión (Offline)';
+            badge.className = 'status-badge status-offline';
+        }
+    } catch (e) {
+        console.error('Status check failed:', e);
+    }
+}
+
+// ─── Login ────────────────────────────────────────────
+async function handleLogin(e) {
+    e.preventDefault();
+    const email = document.getElementById('loginEmail').value;
+    const password = document.getElementById('loginPassword').value;
+    const errorEl = document.getElementById('loginError');
+    const btn = document.getElementById('btnLogin');
+
+    btn.textContent = 'Conectando...';
+    btn.disabled = true;
+    errorEl.classList.add('hidden');
+
+    try {
+        const result = await eel.login(email, password)();
+        if (result.success) {
+            showDashboard(result.user);
+        } else {
+            errorEl.textContent = result.error;
+            errorEl.classList.remove('hidden');
+        }
+    } catch (err) {
+        errorEl.textContent = 'Error de conexión con el servidor.';
+        errorEl.classList.remove('hidden');
+    }
+
+    btn.textContent = 'Iniciar Sesión';
+    btn.disabled = false;
+}
+
+// ─── Logout ───────────────────────────────────────────
+async function handleLogout() {
+    await eel.logout()();
+    sessionActive = false;
+    if (refreshInterval) clearInterval(refreshInterval);
+
+    document.getElementById('screenDashboard').classList.add('hidden');
+    document.getElementById('screenLogin').classList.remove('hidden');
+    document.getElementById('userDisplay').classList.add('hidden');
+    document.getElementById('btnLogout').classList.add('hidden');
+}
+
+// ─── Show Dashboard ───────────────────────────────────
+async function showDashboard(user) {
+    document.getElementById('screenLogin').classList.add('hidden');
+    document.getElementById('screenDashboard').classList.remove('hidden');
+    document.getElementById('userDisplay').textContent = user.name;
+    document.getElementById('userDisplay').classList.remove('hidden');
+    document.getElementById('btnLogout').classList.remove('hidden');
+
+    await loadWorkspaces();
+    await checkStatus();
+}
+
+// ─── Workspaces ───────────────────────────────────────
+async function loadWorkspaces() {
+    const workspaces = await eel.get_workspaces()();
+    const grid = document.getElementById('workspaceGrid');
+
+    if (!workspaces || workspaces.length === 0) {
+        grid.innerHTML = '<p class="text-muted">No tienes espacios de trabajo asignados. Contacta al administrador.</p>';
+        return;
+    }
+
+    grid.innerHTML = workspaces.map(ws => `
+        <div class="workspace-item ${selectedWorkspaceId === ws.id ? 'selected' : ''}"
+             onclick="selectWorkspace('${ws.id}', '${ws.name}')">
+            <h3>${ws.name}</h3>
+            <p>${ws.cloudPath || 'Sin ruta'}</p>
+        </div>
+    `).join('');
+
+    // Add start button if workspace selected
+    if (selectedWorkspaceId) {
+        const existing = document.getElementById('btnStartSession');
+        if (!existing) {
+            const btn = document.createElement('button');
+            btn.id = 'btnStartSession';
+            btn.className = 'btn btn-primary mt-2';
+            btn.textContent = '▶ Iniciar Sesión de Escaneo';
+            btn.onclick = handleStartSession;
+            document.getElementById('panelWorkspaces').appendChild(btn);
+        }
+    }
+}
+
+async function selectWorkspace(id, name) {
+    const result = await eel.select_workspace(id, name)();
+    if (result.success) {
+        selectedWorkspaceId = id;
+        selectedWorkspaceName = name;
+        await loadWorkspaces();
+    }
+}
+
+// ─── Session ──────────────────────────────────────────
+async function handleStartSession() {
+    if (!selectedWorkspaceId) {
+        alert('Selecciona un espacio de trabajo primero.');
+        return;
+    }
+
+    const result = await eel.start_session()();
+    if (result.success) {
+        sessionActive = true;
+        document.getElementById('panelWorkspaces').classList.add('hidden');
+        document.getElementById('panelSession').classList.remove('hidden');
+        document.getElementById('sessionWorkspaceName').textContent = selectedWorkspaceName;
+        document.getElementById('watchFolderPath').textContent = result.watch_folder;
+
+        // Start periodic refresh
+        refreshInterval = setInterval(refreshSessionFiles, 3000);
+    } else {
+        alert(result.error);
+    }
+}
+
+async function handleEndSession() {
+    if (!confirm('¿Cerrar la sesión? Se procesarán y subirán todos los documentos pendientes.')) return;
+
+    // Show progress panel
+    document.getElementById('panelSession').classList.add('hidden');
+    document.getElementById('panelProgress').classList.remove('hidden');
+
+    const result = await eel.end_session()();
+
+    // Show results
+    document.getElementById('panelProgress').classList.add('hidden');
+    document.getElementById('panelResults').classList.remove('hidden');
+
+    const content = document.getElementById('resultsContent');
+    content.innerHTML = `
+        <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:10px; text-align:center;">
+            <div class="card">
+                <div style="font-size:24px; font-weight:bold; color:#059669;">${result.processed || 0}</div>
+                <div class="text-muted">Procesados</div>
+            </div>
+            <div class="card">
+                <div style="font-size:24px; font-weight:bold; color:#2563eb;">${result.uploaded || 0}</div>
+                <div class="text-muted">Subidos</div>
+            </div>
+            <div class="card">
+                <div style="font-size:24px; font-weight:bold; color:#dc2626;">${result.errors || 0}</div>
+                <div class="text-muted">Errores</div>
+            </div>
+        </div>
+        <p class="text-muted mt-2">Logs sincronizados: ${result.logs_synced || 0}</p>
+    `;
+
+    sessionActive = false;
+    if (refreshInterval) clearInterval(refreshInterval);
+}
+
+// ─── File Import ──────────────────────────────────────
+async function handleImportFiles() {
+    // Use a hidden file input to select files
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.accept = '.pdf,.png,.jpg,.jpeg,.tiff,.bmp';
+
+    input.onchange = async (e) => {
+        const files = Array.from(e.target.files);
+        if (files.length === 0) return;
+
+        // Get full paths (in Eel context, we need to use the temp folder approach)
+        // Since browser file input doesn't give real paths, we'll show a message
+        alert(`Seleccionados ${files.length} archivo(s). En entorno de escritorio, los archivos se copiarán automáticamente.\n\nPor ahora, deposita los archivos en la carpeta de vigilancia:\n${document.getElementById('watchFolderPath').textContent}`);
+    };
+    input.click();
+}
+
+// ─── Tab Navigation ───────────────────────────────────
+function switchTab(tabName) {
+    // Update tab buttons
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    event.target.classList.add('active');
+
+    // Show/hide tab content
+    document.getElementById('tabFiles').classList.add('hidden');
+    document.getElementById('tabReview').classList.add('hidden');
+    document.getElementById('tabQueue').classList.add('hidden');
+    document.getElementById('tab' + tabName.charAt(0).toUpperCase() + tabName.slice(1)).classList.remove('hidden');
+
+    // Refresh data
+    if (tabName === 'files') refreshSessionFiles();
+    if (tabName === 'review') refreshPendingReview();
+    if (tabName === 'queue') refreshQueue();
+}
+
+// ─── Refresh Functions ────────────────────────────────
+async function refreshSessionFiles() {
+    try {
+        const files = await eel.get_session_files()();
+        const tbody = document.getElementById('filesTableBody');
+
+        if (!files || files.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">No hay archivos en la sesión.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = files.map(f => `
+            <tr>
+                <td>${f.name}</td>
+                <td>${formatSize(f.size)}</td>
+                <td><span class="badge badge-blue">${f.ext.toUpperCase()}</span></td>
+            </tr>
+        `).join('');
+
+        updateDocCount(files.length);
+    } catch (e) { /* ignore refresh errors */ }
+}
+
+async function refreshPendingReview() {
+    try {
+        const items = await eel.get_pending_review()();
+        const tbody = document.getElementById('reviewTableBody');
+
+        if (!items || items.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">No hay documentos pendientes.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = items.map(item => `
+            <tr>
+                <td>${item.original_name}</td>
+                <td><span class="text-muted">${item.error_message || 'Sin detalle'}</span></td>
+                <td>
+                    <button class="btn btn-sm btn-primary"
+                        onclick="openCorrection('${item.id}', '${item.original_name}', '${(item.error_message || '').replace(/'/g, '')}')">
+                        ✏️ Corregir
+                    </button>
+                </td>
+            </tr>
+        `).join('');
+    } catch (e) { /* ignore */ }
+}
+
+async function refreshQueue() {
+    try {
+        const items = await eel.get_queue_items()();
+        const tbody = document.getElementById('queueTableBody');
+
+        if (!items || items.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">Cola vacía.</td></tr>';
+            return;
+        }
+
+        const statusMap = {
+            'PENDING': ['Pendiente', 'badge-yellow'],
+            'PENDING_REVIEW': ['Revisión', 'badge-red'],
+            'PROCESSING': ['Procesando', 'badge-blue'],
+            'PROCESSED': ['Procesado', 'badge-green'],
+            'UPLOADED': ['Subido', 'badge-green'],
+            'ERROR': ['Error', 'badge-red'],
+        };
+
+        tbody.innerHTML = items.map(item => {
+            const [label, cls] = statusMap[item.status] || ['Desconocido', 'badge-yellow'];
+            return `
+                <tr>
+                    <td>${item.original_name}</td>
+                    <td><span class="badge ${cls}">${label}</span></td>
+                    <td>${item.workspace_name || '—'}</td>
+                    <td class="text-muted">${item.created_at || '—'}</td>
+                </tr>
+            `;
+        }).join('');
+    } catch (e) { /* ignore */ }
+}
+
+// ─── Helpers ──────────────────────────────────────────
+function updateDocCount(count) {
+    const el = document.getElementById('sessionDocCount');
+    if (el) {
+        if (typeof count === 'number') {
+            el.textContent = count + ' documento' + (count !== 1 ? 's' : '');
+        }
+    }
+}
+
+function formatSize(bytes) {
+    if (!bytes) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
+}
+
+function openCorrection(id, name, error) {
+    window.open(`correction.html?id=${id}&name=${encodeURIComponent(name)}&error=${encodeURIComponent(error)}`, '_blank', 'width=650,height=450');
+}
+
+function resetToDashboard() {
+    document.getElementById('panelResults').classList.add('hidden');
+    document.getElementById('panelWorkspaces').classList.remove('hidden');
+    document.getElementById('panelSession').classList.add('hidden');
+    selectedWorkspaceId = null;
+    selectedWorkspaceName = null;
+    loadWorkspaces();
+}
