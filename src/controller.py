@@ -60,6 +60,15 @@ def login(email, password):
 def logout():
     """Log out current user."""
     global current_user, current_workspace, current_session_id
+
+    # Stop active session if any
+    if current_session_id:
+        try:
+            scanner.stop_watching()
+            db.close_session(current_session_id)
+        except Exception:
+            pass
+
     if current_user:
         db.create_audit_log(
             current_user["id"], current_user["name"], "LOGOUT",
@@ -179,6 +188,74 @@ def import_files(file_paths):
         _on_file_detected(path)
 
     return {"success": True, "count": len(imported)}
+
+
+@eel.expose
+def pick_and_import_files():
+    """Open a native file dialog to select files and import them."""
+    if not current_session_id:
+        return {"success": False, "error": "Inicia una sesión primero."}
+
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+
+        files = filedialog.askopenfilenames(
+            title="Seleccionar archivos para importar",
+            filetypes=[
+                ("Documentos", "*.pdf *.png *.jpg *.jpeg *.tiff *.bmp"),
+                ("PDF", "*.pdf"),
+                ("Imágenes", "*.png *.jpg *.jpeg *.tiff *.bmp"),
+                ("Todos", "*.*"),
+            ]
+        )
+        root.destroy()
+
+        if not files:
+            return {"success": True, "count": 0, "message": "No se seleccionaron archivos."}
+
+        imported = scanner.import_files(list(files))
+        for path in imported:
+            _on_file_detected(path)
+
+        return {"success": True, "count": len(imported)}
+    except Exception as e:
+        return {"success": False, "error": f"Error al seleccionar archivos: {str(e)}"}
+
+
+@eel.expose
+def export_files():
+    """Export processed files to a user-chosen directory."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+
+        dest_dir = filedialog.askdirectory(
+            title="Seleccionar carpeta de destino para exportar"
+        )
+        root.destroy()
+
+        if not dest_dir:
+            return {"success": True, "count": 0, "message": "No se seleccionó carpeta."}
+
+        import shutil
+        exported = 0
+        for f in os.listdir(OUTPUT_DIR):
+            src = os.path.join(OUTPUT_DIR, f)
+            if os.path.isfile(src):
+                dest = os.path.join(dest_dir, f)
+                shutil.copy2(src, dest)
+                exported += 1
+
+        return {"success": True, "count": exported, "destination": dest_dir}
+    except Exception as e:
+        return {"success": False, "error": f"Error al exportar: {str(e)}"}
 
 
 @eel.expose
@@ -401,7 +478,10 @@ def _process_all_pending():
     global uploader
 
     config = db.get_config()
-    uploader = CloudUploader(config)
+    google_creds = db.get_google_credentials()
+    # Merge google creds into config for the uploader
+    merged_config = {**config, **google_creds}
+    uploader = CloudUploader(merged_config)
 
     pending = db.get_queue_items(status="PENDING")
     processed = 0
@@ -423,14 +503,20 @@ def _process_all_pending():
             result = _process_single_document(item["file_path"], item["workspace_id"])
 
             if result.get("success"):
-                # Upload to cloud
+                # Upload to cloud — pass full workspace data for Drive credentials
                 ws_name = item.get("workspace_name", "default")
                 cloud_path = current_workspace.get("cloudPath", "") if current_workspace else ""
-                upload_result = uploader.upload(result["output_path"], cloud_path, ws_name)
+                upload_result = uploader.upload(
+                    result["output_path"],
+                    cloud_path,
+                    ws_name,
+                    workspace=current_workspace,
+                )
 
                 if upload_result.get("success"):
                     db.update_queue_item(item["id"], status="UPLOADED")
                     uploaded += 1
+                    print(f"[PROCESS] ✅ Subido: {item['original_name']} → {upload_result.get('provider', 'N/A')}")
 
                     # Delete local if configured
                     if config.get("deleteLocalAfterUpload"):
@@ -440,6 +526,7 @@ def _process_all_pending():
                             pass
                 else:
                     db.update_queue_item(item["id"], status="PROCESSED")
+                    print(f"[PROCESS] ⚠️ Procesado pero no subido: {item['original_name']} — {upload_result.get('error', '')}")
 
                 db.create_audit_log(
                     current_user["id"] if current_user else None,
@@ -450,6 +537,7 @@ def _process_all_pending():
                         "encryption": result["encryption"]["type"],
                         "compressed": result.get("compressed", False),
                         "uploaded": upload_result.get("success", False),
+                        "provider": upload_result.get("provider", "NONE"),
                     }),
                     "SUCCESS",
                     item.get("workspace_id")

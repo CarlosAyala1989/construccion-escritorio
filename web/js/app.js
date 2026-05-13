@@ -67,14 +67,34 @@ async function handleLogin(e) {
 
 // ─── Logout ───────────────────────────────────────────
 async function handleLogout() {
-    await eel.logout()();
+    if (sessionActive) {
+        if (!confirm('Tienes una sesión activa. ¿Deseas cerrar sesión de todas formas?')) return;
+    }
+
+    try {
+        await eel.logout()();
+    } catch (e) {
+        console.error('Logout error:', e);
+    }
+
     sessionActive = false;
+    selectedWorkspaceId = null;
+    selectedWorkspaceName = null;
     if (refreshInterval) clearInterval(refreshInterval);
 
+    // Reset ALL screens
     document.getElementById('screenDashboard').classList.add('hidden');
+    document.getElementById('panelSession').classList.add('hidden');
+    document.getElementById('panelProgress').classList.add('hidden');
+    document.getElementById('panelResults').classList.add('hidden');
+    document.getElementById('panelWorkspaces').classList.remove('hidden');
     document.getElementById('screenLogin').classList.remove('hidden');
     document.getElementById('userDisplay').classList.add('hidden');
     document.getElementById('btnLogout').classList.add('hidden');
+
+    // Clear form fields
+    document.getElementById('loginEmail').value = '';
+    document.getElementById('loginPassword').value = '';
 }
 
 // ─── Show Dashboard ───────────────────────────────────
@@ -190,21 +210,41 @@ async function handleEndSession() {
 
 // ─── File Import ──────────────────────────────────────
 async function handleImportFiles() {
-    // Use a hidden file input to select files
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.multiple = true;
-    input.accept = '.pdf,.png,.jpg,.jpeg,.tiff,.bmp';
+    try {
+        const result = await eel.pick_and_import_files()();
+        if (result.success) {
+            if (result.count > 0) {
+                alert(`✅ ${result.count} archivo(s) importado(s) correctamente.`);
+                refreshSessionFiles();
+            } else {
+                // User cancelled the dialog
+            }
+        } else {
+            alert(`Error: ${result.error}`);
+        }
+    } catch (e) {
+        alert('Error al importar archivos. Asegúrate de que la aplicación tiene permisos.');
+        console.error('Import error:', e);
+    }
+}
 
-    input.onchange = async (e) => {
-        const files = Array.from(e.target.files);
-        if (files.length === 0) return;
-
-        // Get full paths (in Eel context, we need to use the temp folder approach)
-        // Since browser file input doesn't give real paths, we'll show a message
-        alert(`Seleccionados ${files.length} archivo(s). En entorno de escritorio, los archivos se copiarán automáticamente.\n\nPor ahora, deposita los archivos en la carpeta de vigilancia:\n${document.getElementById('watchFolderPath').textContent}`);
-    };
-    input.click();
+// ─── File Export ──────────────────────────────────────
+async function handleExportFiles() {
+    try {
+        const result = await eel.export_files()();
+        if (result.success) {
+            if (result.count > 0) {
+                alert(`✅ ${result.count} archivo(s) exportado(s) a:\n${result.destination}`);
+            } else {
+                // User cancelled or no files
+            }
+        } else {
+            alert(`Error: ${result.error}`);
+        }
+    } catch (e) {
+        alert('Error al exportar archivos.');
+        console.error('Export error:', e);
+    }
 }
 
 // ─── Tab Navigation ───────────────────────────────────

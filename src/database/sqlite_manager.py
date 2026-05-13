@@ -183,7 +183,8 @@ class DatabaseManager:
 
         cursor = conn.cursor(dictionary=True)
         cursor.execute("""
-            SELECT w.id, w.name, w.cloudPath, w.defaultPassword
+            SELECT w.id, w.name, w.cloudPath, w.defaultPassword,
+                   w.cloudFolderId, w.cloudRefreshToken
             FROM Workspace w
             INNER JOIN _UserWorkspaces uw ON uw.B = w.id
             WHERE uw.A = %s
@@ -247,6 +248,21 @@ class DatabaseManager:
             "deleteLocalAfterUpload": False,
             "cloudProvider": "MANUAL",
         }
+
+    def get_google_credentials(self):
+        """Get Google OAuth client credentials from Config.cloudCredentials."""
+        config = self.get_config()
+        creds_json = config.get("cloudCredentials", "")
+        if creds_json:
+            try:
+                creds = json.loads(creds_json)
+                return {
+                    "googleClientId": creds.get("clientId", ""),
+                    "googleClientSecret": creds.get("clientSecret", ""),
+                }
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return {"googleClientId": "", "googleClientSecret": ""}
 
     # ─── Nomenclatures ─────────────────────────────────
 
