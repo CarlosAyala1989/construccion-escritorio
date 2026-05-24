@@ -219,20 +219,3 @@ class ScannerManager:
     @property
     def temp_folder(self):
         return TEMP_DIR
-ath
-        base, ext = os.path.splitext(path)
-        v = 2
-        while os.path.exists(f"{base}_v{v}{ext}"):
-            v += 1
-        return f"{base}_v{v}{ext}"
-
-    @property
-    def watch_folder(self):
-        return WATCH_DIR
-
-    @property
-    def temp_folder(self):
-        return TEMP_DIR
-R
-elf):
-        return TEMP_DIR

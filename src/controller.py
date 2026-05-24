@@ -610,35 +610,3 @@ def _process_all_pending():
     scanner.clear_temp()
 
     return {"processed": processed, "errors": errors, "uploaded": uploaded}
- manual requerida")
-                )
-                errors += 1
-            else:
-                db.update_queue_item(
-                    item["id"],
-                    status="ERROR",
-                    error_message=result.get("error", "Error desconocido")
-                )
-                errors += 1
-
-        except Exception as e:
-            db.update_queue_item(item["id"], status="ERROR", error_message=str(e))
-            errors += 1
-
-    # Clean temp workspace
-    scanner.clear_temp()
-
-    return {"processed": processed, "errors": errors, "uploaded": uploaded}
-    status="ERROR",
-                    error_message=result.get("error", "Error desconocido")
-                )
-                errors += 1
-
-        except Exception as e:
-            db.update_queue_item(item["id"], status="ERROR", error_message=str(e))
-            errors += 1
-
-    # Clean temp workspace
-    scanner.clear_temp()
-
-    return {"processed": processed, "errors": errors, "uploaded": uploaded}
