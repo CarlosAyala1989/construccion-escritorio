@@ -15,6 +15,9 @@ from src.database.sqlite_manager import DatabaseManager
 from src.core.ocr_engine import OCREngine
 from src.core.vision_engine import VisionEngine
 from src.core.crypto_engine import CryptoEngine
+from src.core.file_structurer import FileStructurer
+from src.core.pending_tray import PendingTray
+from src.core.secure_file_writer import SecureFileWriter
 from src.hardware.scanner import ScannerManager
 from src.sync.cloud_uploader import CloudUploader
 
@@ -32,7 +35,9 @@ current_session_id = None
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = os.path.join(BASE_DIR, "data", "processed")
+PENDING_DIR = os.path.join(BASE_DIR, "data", "pending_review")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(PENDING_DIR, exist_ok=True)
 
 
 # ─── Authentication ────────────────────────────────────
@@ -189,6 +194,19 @@ def import_files(file_paths):
 
     return {"success": True, "count": len(imported)}
 
+
+@eel.expose
+def scan_document():
+    """Trigger physical scan from a connected scanner."""
+    if not current_session_id:
+        return {"success": False, "error": "Inicia una sesión primero."}
+
+    path = scanner.scan_physical_document()
+    if path:
+        _on_file_detected(path)
+        return {"success": True, "path": path}
+    else:
+        return {"success": False, "error": "Fallo al escanear. Asegúrate de que hay un escáner conectado y encendido."}
 
 @eel.expose
 def pick_and_import_files():
@@ -394,54 +412,79 @@ def _process_single_document(file_path, workspace_id=None):
     nomenclatures = db.get_nomenclatures()
 
     # ─── Phase 2: OCR & Classification ─────────────
+    # El archivo en temp_workspace está cifrado con AES-256. Lo desciframos temporalmente para procesamiento.
+    temp_clear_path = file_path + ".clear"
+    try:
+        clear_bytes = SecureFileWriter.read_secure(file_path)
+        with open(temp_clear_path, "wb") as f:
+            f.write(clear_bytes)
+    except Exception as e:
+        # Fallback for manually added or old cleartext files
+        import shutil
+        shutil.copy2(file_path, temp_clear_path)
+
     ext = os.path.splitext(file_path)[1].lower()
     text = ""
     if ext == ".pdf":
-        text = ocr.extract_text_from_pdf(file_path)
+        text = ocr.extract_text_from_pdf(temp_clear_path)
     elif ext in [".png", ".jpg", ".jpeg", ".tiff", ".bmp"]:
-        text = ocr.extract_text_from_image(file_path)
+        text = ocr.extract_text_from_image(temp_clear_path)
 
     # Try nomenclature extraction
     nomenclature_data = ocr.extract_nomenclature(text, nomenclatures)
-    new_filename = None
+    structured_path = None
     if nomenclature_data:
         sep = nomenclatures[0].get("separator", "_") if nomenclatures else "_"
-        new_filename = ocr.build_filename(nomenclature_data, sep)
+        # Get the structured path (doesn't create the file, just the path)
+        structured_path = FileStructurer.RenameAndStructure(nomenclature_data, OUTPUT_DIR, sep)
 
     # If nomenclature failed and we have nomenclature rules, mark for review
     if nomenclatures and not nomenclature_data:
+        # CP-031: HandleOCRFailure() mueve doc a PENDIENTES
+        # Borramos el temporal en claro
+        try:
+            os.remove(temp_clear_path)
+        except OSError:
+            pass
+        pending_path = PendingTray.HandleOCRFailure(file_path, PENDING_DIR)
         return {
             "success": False,
             "error": "La IA no pudo extraer la nomenclatura del documento.",
             "needs_review": True,
+            "pending_path": pending_path
         }
 
     # ─── Phase 3: Privacy Shield ───────────────────
     semantic_policy = ocr.check_semantic_policies(text, policies)
-    visual_policy = vision.check_document(file_path, policies)
+    visual_policy = vision.check_document(temp_clear_path, policies)
 
     # Resolve encryption password (hierarchical)
     encryption_result = crypto.resolve_password(workspace, semantic_policy, visual_policy)
 
     # Determine output filename
-    if new_filename:
-        output_name = new_filename
+    if structured_path:
+        output_path = structured_path
     else:
         output_name = os.path.basename(file_path)
-
-    output_path = os.path.join(OUTPUT_DIR, output_name)
+        output_path = os.path.join(OUTPUT_DIR, output_name)
+        
     output_path = crypto._prevent_collision(output_path)
 
     # Encrypt if password available
     if encryption_result["password"]:
-        success = crypto.encrypt_pdf(file_path, output_path, encryption_result["password"])
+        success = crypto.encrypt_pdf(temp_clear_path, output_path, encryption_result["password"])
         if not success:
-            # If encryption fails, copy unencrypted
             import shutil
-            shutil.copy2(file_path, output_path)
+            shutil.copy2(temp_clear_path, output_path)
     else:
         import shutil
-        shutil.copy2(file_path, output_path)
+        shutil.copy2(temp_clear_path, output_path)
+        
+    # Limpiar archivo en claro temporal
+    try:
+        os.remove(temp_clear_path)
+    except OSError:
+        pass
 
     # ─── Phase 4: Compression (if enabled) ─────────
     compressed = False
@@ -555,6 +598,38 @@ def _process_all_pending():
                 db.update_queue_item(
                     item["id"],
                     status="ERROR",
+                    error_message=result.get("error", "Error desconocido")
+                )
+                errors += 1
+
+        except Exception as e:
+            db.update_queue_item(item["id"], status="ERROR", error_message=str(e))
+            errors += 1
+
+    # Clean temp workspace
+    scanner.clear_temp()
+
+    return {"processed": processed, "errors": errors, "uploaded": uploaded}
+ manual requerida")
+                )
+                errors += 1
+            else:
+                db.update_queue_item(
+                    item["id"],
+                    status="ERROR",
+                    error_message=result.get("error", "Error desconocido")
+                )
+                errors += 1
+
+        except Exception as e:
+            db.update_queue_item(item["id"], status="ERROR", error_message=str(e))
+            errors += 1
+
+    # Clean temp workspace
+    scanner.clear_temp()
+
+    return {"processed": processed, "errors": errors, "uploaded": uploaded}
+    status="ERROR",
                     error_message=result.get("error", "Error desconocido")
                 )
                 errors += 1

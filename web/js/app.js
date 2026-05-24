@@ -229,6 +229,37 @@ async function handleImportFiles() {
 }
 
 // ─── File Export ──────────────────────────────────────
+async function handleScanDocument() {
+    if (!sessionActive) {
+        alert('Debes iniciar sesión de escaneo primero.');
+        return;
+    }
+    
+    // Disable UI during scan
+    const btn = document.getElementById('btnScanDoc');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳ Escaneando...';
+    }
+
+    try {
+        const result = await eel.scan_document()();
+        if (result.success) {
+            refreshSessionFiles();
+        } else {
+            alert(`Error al escanear: ${result.error}`);
+        }
+    } catch (e) {
+        alert('Error inesperado al invocar el escaner.');
+        console.error('Scan error:', e);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '🖨 Escanear Físico';
+        }
+    }
+}
+
 async function handleExportFiles() {
     try {
         const result = await eel.export_files()();

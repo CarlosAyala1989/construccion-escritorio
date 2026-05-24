@@ -79,6 +79,14 @@ class ScannerManager:
 
     def _on_new_file(self, file_path):
         """Handle a newly detected file."""
+        if self.is_paused:
+            self.memory_queue.append(file_path)
+            print(f"[SCANNER] En memoria (pausado): {os.path.basename(file_path)}")
+            return
+            
+        self._process_file_internal(file_path)
+
+    def _process_file_internal(self, file_path):
         print(f"[SCANNER] New file detected: {os.path.basename(file_path)}")
 
         # Copy to temp workspace
@@ -86,11 +94,11 @@ class ScannerManager:
         dest = self._prevent_collision(dest)
 
         try:
-            shutil.copy2(file_path, dest)
+            SecureFileWriter.write_secure(file_path, dest)
             if self.on_file_callback:
                 self.on_file_callback(dest)
         except Exception as e:
-            print(f"[SCANNER] Failed to copy file: {e}")
+            print(f"[SCANNER] Failed to copy/encrypt file: {e}")
 
     def import_files(self, file_paths):
         """
@@ -104,13 +112,68 @@ class ScannerManager:
             dest = os.path.join(TEMP_DIR, os.path.basename(src))
             dest = self._prevent_collision(dest)
             try:
-                shutil.copy2(src, dest)
+                SecureFileWriter.write_secure(src, dest)
                 imported.append(dest)
-                print(f"[SCANNER] Imported: {os.path.basename(dest)}")
+                print(f"[SCANNER] Imported/Encrypted: {os.path.basename(dest)}")
             except Exception as e:
                 print(f"[SCANNER] Import failed for {src}: {e}")
 
         return imported
+
+    def scan_physical_document(self):
+        """
+        CP-054, CP-055, CP-056: Interoperabilidad TWAIN/WIA (y SANE en Linux).
+        Escanea físicamente un documento desde hardware conectado.
+        """
+        import sys
+        import subprocess
+        import uuid
+
+        scan_filename = f"scan_{uuid.uuid4().hex[:8]}.png"
+        scan_path = os.path.join(TEMP_DIR, scan_filename)
+        scan_path = self._prevent_collision(scan_path)
+
+        try:
+            if sys.platform.startswith("linux"):
+                print("[SCANNER] Iniciando escaneo nativo en Linux (SANE/scanimage)...")
+                raw_path = os.path.join(BASE_DIR, "data", scan_filename)
+                result = subprocess.run(
+                    ["scanimage", "--format=png", "--resolution", "300", "-o", raw_path],
+                    capture_output=True, text=True
+                )
+                if result.returncode == 0 and os.path.exists(raw_path):
+                    SecureFileWriter.write_secure(raw_path, scan_path)
+                    os.remove(raw_path)
+                    print(f"[SCANNER] Escaneo exitoso: {os.path.basename(scan_path)}")
+                    return scan_path
+                else:
+                    print(f"[SCANNER] scanimage falló: {result.stderr}")
+                    return None
+            elif sys.platform == "win32":
+                print("[SCANNER] Iniciando escaneo nativo en Windows (WIA)...")
+                try:
+                    import win32com.client
+                    wia = win32com.client.Dispatch("WIA.CommonDialog")
+                    # FormatID para PNG: {B96B3CAF-0728-11D3-9D7B-0000F81EF32E}
+                    image = wia.ShowAcquireImage(1, 4, 1, "{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}", False, True, False)
+                    if image:
+                        raw_path = os.path.join(BASE_DIR, "data", scan_filename)
+                        image.SaveFile(raw_path)
+                        if os.path.exists(raw_path):
+                            SecureFileWriter.write_secure(raw_path, scan_path)
+                            os.remove(raw_path)
+                            print(f"[SCANNER] Escaneo exitoso: {os.path.basename(scan_path)}")
+                            return scan_path
+                except Exception as e:
+                    print(f"[SCANNER] Windows WIA falló: {e}")
+                    return None
+            else:
+                print(f"[SCANNER] OS no soportado para escaneo nativo: {sys.platform}")
+                return None
+        except Exception as e:
+            print(f"[SCANNER] Excepción durante el escaneo: {e}")
+            return None
+        return None
 
     def get_temp_files(self):
         """List all files currently in the temp workspace."""
@@ -155,4 +218,21 @@ class ScannerManager:
 
     @property
     def temp_folder(self):
+        return TEMP_DIR
+ath
+        base, ext = os.path.splitext(path)
+        v = 2
+        while os.path.exists(f"{base}_v{v}{ext}"):
+            v += 1
+        return f"{base}_v{v}{ext}"
+
+    @property
+    def watch_folder(self):
+        return WATCH_DIR
+
+    @property
+    def temp_folder(self):
+        return TEMP_DIR
+R
+elf):
         return TEMP_DIR
