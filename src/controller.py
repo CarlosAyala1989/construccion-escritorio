@@ -196,17 +196,25 @@ def import_files(file_paths):
 
 
 @eel.expose
-def scan_document():
+def get_scanners():
+    """List available physical scanners."""
+    return scanner.get_scanners()
+
+@eel.expose
+def scan_document(device_id=None):
     """Trigger physical scan from a connected scanner."""
     if not current_session_id:
         return {"success": False, "error": "Inicia una sesión primero."}
 
-    path = scanner.scan_physical_document()
-    if path:
-        _on_file_detected(path)
-        return {"success": True, "path": path}
-    else:
-        return {"success": False, "error": "Fallo al escanear. Asegúrate de que hay un escáner conectado y encendido."}
+    try:
+        path = scanner.scan_physical_document(device_id)
+        if path:
+            _on_file_detected(path)
+            return {"success": True, "path": path}
+        else:
+            return {"success": False, "error": "Fallo al escanear. Verifica que el escáner esté encendido y sin atascos."}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 @eel.expose
 def pick_and_import_files():

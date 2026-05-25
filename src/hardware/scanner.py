@@ -8,6 +8,7 @@ import os
 import shutil
 import time
 import threading
+from src.core.secure_file_writer import SecureFileWriter
 
 try:
     from watchdog.observers import Observer
@@ -120,50 +121,123 @@ class ScannerManager:
 
         return imported
 
-    def scan_physical_document(self):
+    def get_scanners(self):
+        """
+        Obtiene la lista de escáneres disponibles (SANE en Linux, WIA en Windows).
+        """
+        scanners = []
+        import sys
+        try:
+            if sys.platform.startswith("linux"):
+                import subprocess
+                # Listar dispositivos SANE (incluyendo Wi-Fi/AirScan)
+                result = subprocess.run(["scanimage", "-f", "%d|%v %m%n"], capture_output=True, text=True)
+                if result.returncode == 0:
+                    lines = result.stdout.strip().split('\n')
+                    for line in lines:
+                        if '|' in line:
+                            parts = line.split('|', 1)
+                            scanners.append({"id": parts[0].strip(), "name": parts[1].strip()})
+            elif sys.platform == "win32":
+                import win32com.client
+                dev_mgr = win32com.client.Dispatch("WIA.DeviceManager")
+                for i in range(1, dev_mgr.DeviceInfos.Count + 1):
+                    info = dev_mgr.DeviceInfos(i)
+                    if info.Type == 1:  # 1 = ScannerDeviceType
+                        d_id = info.DeviceID
+                        d_name = f"Escáner {i}"
+                        for j in range(1, info.Properties.Count + 1):
+                            if info.Properties(j).Name == "Name":
+                                d_name = info.Properties(j).Value
+                                break
+                        scanners.append({"id": d_id, "name": d_name})
+        except Exception as e:
+            print(f"[SCANNER] Error listando escáneres: {e}")
+            
+        return scanners
+
+    def scan_physical_document(self, device_id=None):
         """
         CP-054, CP-055, CP-056: Interoperabilidad TWAIN/WIA (y SANE en Linux).
-        Escanea físicamente un documento desde hardware conectado.
+        Escanea físicamente un documento desde hardware conectado y lo convierte a PDF.
         """
         import sys
         import subprocess
         import uuid
+        from PIL import Image
 
-        scan_filename = f"scan_{uuid.uuid4().hex[:8]}.png"
+        base_name = f"scan_{uuid.uuid4().hex[:8]}"
+        scan_filename = f"{base_name}.pdf"
         scan_path = os.path.join(TEMP_DIR, scan_filename)
         scan_path = self._prevent_collision(scan_path)
 
+        def _convert_and_secure(raw_img_path):
+            pdf_raw_path = raw_img_path + ".pdf"
+            img = Image.open(raw_img_path)
+            img.convert("RGB").save(pdf_raw_path, "PDF")
+            os.remove(raw_img_path)
+            
+            SecureFileWriter.write_secure(pdf_raw_path, scan_path)
+            os.remove(pdf_raw_path)
+            print(f"[SCANNER] Escaneo exitoso convertido a PDF: {os.path.basename(scan_path)}")
+            return scan_path
+
         try:
             if sys.platform.startswith("linux"):
-                print("[SCANNER] Iniciando escaneo nativo en Linux (SANE/scanimage)...")
-                raw_path = os.path.join(BASE_DIR, "data", scan_filename)
-                result = subprocess.run(
-                    ["scanimage", "--format=png", "--resolution", "300", "-o", raw_path],
-                    capture_output=True, text=True
-                )
+                print(f"[SCANNER] Iniciando escaneo nativo en Linux (Dispositivo: {device_id or 'Auto'})...")
+                raw_path = os.path.join(BASE_DIR, "data", f"{base_name}.png")
+                
+                cmd = ["scanimage", "--format=png", "--resolution=300", f"--output-file={raw_path}"]
+                if device_id:
+                    cmd.extend(["-d", device_id])
+                    
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                
                 if result.returncode == 0 and os.path.exists(raw_path):
-                    SecureFileWriter.write_secure(raw_path, scan_path)
-                    os.remove(raw_path)
-                    print(f"[SCANNER] Escaneo exitoso: {os.path.basename(scan_path)}")
-                    return scan_path
+                    return _convert_and_secure(raw_path)
                 else:
-                    print(f"[SCANNER] scanimage falló: {result.stderr}")
-                    return None
+                    # Retry once if it fails, airscan sometimes fails on first try
+                    print(f"[SCANNER] scanimage falló (intento 1): {result.stderr}. Reintentando...")
+                    import time
+                    time.sleep(2)
+                    result = subprocess.run(cmd, capture_output=True, text=True)
+                    if result.returncode == 0 and os.path.exists(raw_path):
+                        return _convert_and_secure(raw_path)
+                        
+                    print(f"[SCANNER] scanimage falló de nuevo: {result.stderr}")
+                    raise Exception(f"SANE Error: {result.stderr}")
             elif sys.platform == "win32":
-                print("[SCANNER] Iniciando escaneo nativo en Windows (WIA)...")
+                print(f"[SCANNER] Iniciando escaneo nativo en Windows (WIA)...")
                 try:
                     import win32com.client
-                    wia = win32com.client.Dispatch("WIA.CommonDialog")
-                    # FormatID para PNG: {B96B3CAF-0728-11D3-9D7B-0000F81EF32E}
-                    image = wia.ShowAcquireImage(1, 4, 1, "{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}", False, True, False)
+                    
+                    if device_id:
+                        # Conectar al dispositivo específico
+                        dev_mgr = win32com.client.Dispatch("WIA.DeviceManager")
+                        target_info = None
+                        for i in range(1, dev_mgr.DeviceInfos.Count + 1):
+                            if dev_mgr.DeviceInfos(i).DeviceID == device_id:
+                                target_info = dev_mgr.DeviceInfos(i)
+                                break
+                                
+                        if not target_info:
+                            print(f"[SCANNER] No se encontró el dispositivo {device_id}")
+                            return None
+                            
+                        wia_dev = target_info.Connect()
+                        # Formato PNG
+                        item = wia_dev.Items(1)
+                        image = item.Transfer("{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}")
+                    else:
+                        # Mostrar diálogo WIA
+                        wia = win32com.client.Dispatch("WIA.CommonDialog")
+                        image = wia.ShowAcquireImage(1, 4, 1, "{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}", False, True, False)
+                        
                     if image:
-                        raw_path = os.path.join(BASE_DIR, "data", scan_filename)
+                        raw_path = os.path.join(BASE_DIR, "data", f"{base_name}.png")
                         image.SaveFile(raw_path)
                         if os.path.exists(raw_path):
-                            SecureFileWriter.write_secure(raw_path, scan_path)
-                            os.remove(raw_path)
-                            print(f"[SCANNER] Escaneo exitoso: {os.path.basename(scan_path)}")
-                            return scan_path
+                            return _convert_and_secure(raw_path)
                 except Exception as e:
                     print(f"[SCANNER] Windows WIA falló: {e}")
                     return None

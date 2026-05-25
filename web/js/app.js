@@ -228,12 +228,42 @@ async function handleImportFiles() {
     }
 }
 
-// ─── File Export ──────────────────────────────────────
-async function handleScanDocument() {
+// ─── File Export / Scanner ────────────────────────────
+
+async function openScannerModal() {
     if (!sessionActive) {
         alert('Debes iniciar sesión de escaneo primero.');
         return;
     }
+    
+    document.getElementById('scannerModal').classList.remove('hidden');
+    const select = document.getElementById('scannerSelect');
+    select.innerHTML = '<option value="">Buscando dispositivos...</option>';
+    document.getElementById('btnConfirmScan').disabled = true;
+
+    try {
+        const scanners = await eel.get_scanners()();
+        if (scanners && scanners.length > 0) {
+            select.innerHTML = scanners.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+            // En Windows, opcionalmente permitimos dejar el select vacío para que WIA muestre su propio popup si el user prefiere
+            select.innerHTML += '<option value="">Selección del sistema (por defecto)</option>';
+            document.getElementById('btnConfirmScan').disabled = false;
+        } else {
+            select.innerHTML = '<option value="">No se encontraron escáneres, intenta selección del sistema</option>';
+            document.getElementById('btnConfirmScan').disabled = false;
+        }
+    } catch (e) {
+        select.innerHTML = '<option value="">Error al buscar dispositivos</option>';
+        document.getElementById('btnConfirmScan').disabled = false;
+    }
+}
+
+function closeScannerModal() {
+    document.getElementById('scannerModal').classList.add('hidden');
+}
+
+async function executeScan() {
+    closeScannerModal();
     
     // Disable UI during scan
     const btn = document.getElementById('btnScanDoc');
@@ -242,8 +272,10 @@ async function handleScanDocument() {
         btn.textContent = '⏳ Escaneando...';
     }
 
+    const deviceId = document.getElementById('scannerSelect').value || null;
+
     try {
-        const result = await eel.scan_document()();
+        const result = await eel.scan_document(deviceId)();
         if (result.success) {
             refreshSessionFiles();
         } else {
