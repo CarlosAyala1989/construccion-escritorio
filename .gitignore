@@ -12,7 +12,6 @@ __pycache__/
 
 # Archivos generados por PyInstaller (Empaquetado)
 build/
-dist/
 *.egg-info/
 # Nota: build.spec sí debe subirse, pero las carpetas build/ y dist/ no.
 
