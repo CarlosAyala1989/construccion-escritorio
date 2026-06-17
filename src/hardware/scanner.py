@@ -9,6 +9,7 @@ import shutil
 import time
 import threading
 from src.core.secure_file_writer import SecureFileWriter
+from src.app_paths import DATA_DIR, TEMP_WORKSPACE_DIR, WATCH_DIR, ensure_runtime_dirs
 
 try:
     from watchdog.observers import Observer
@@ -17,11 +18,8 @@ try:
 except ImportError:
     HAS_WATCHDOG = False
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-WATCH_DIR = os.path.join(BASE_DIR, "data", "watch_folder")
-TEMP_DIR = os.path.join(BASE_DIR, "data", "temp_workspace")
-os.makedirs(WATCH_DIR, exist_ok=True)
-os.makedirs(TEMP_DIR, exist_ok=True)
+ensure_runtime_dirs()
+TEMP_DIR = TEMP_WORKSPACE_DIR
 
 
 class PDFHandler(FileSystemEventHandler):
@@ -185,7 +183,7 @@ class ScannerManager:
         try:
             if sys.platform.startswith("linux"):
                 print(f"[SCANNER] Iniciando escaneo nativo en Linux (Dispositivo: {device_id or 'Auto'})...")
-                raw_path = os.path.join(BASE_DIR, "data", f"{base_name}.png")
+                raw_path = os.path.join(DATA_DIR, f"{base_name}.png")
                 
                 cmd = ["scanimage", "--format=png", "--resolution=300", f"--output-file={raw_path}"]
                 if device_id:
@@ -234,7 +232,7 @@ class ScannerManager:
                         image = wia.ShowAcquireImage(1, 4, 1, "{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}", False, True, False)
                         
                     if image:
-                        raw_path = os.path.join(BASE_DIR, "data", f"{base_name}.png")
+                        raw_path = os.path.join(DATA_DIR, f"{base_name}.png")
                         image.SaveFile(raw_path)
                         if os.path.exists(raw_path):
                             return _convert_and_secure(raw_path)

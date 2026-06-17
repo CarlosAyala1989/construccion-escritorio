@@ -20,6 +20,7 @@ from src.core.pending_tray import PendingTray
 from src.core.secure_file_writer import SecureFileWriter
 from src.hardware.scanner import ScannerManager
 from src.sync.cloud_uploader import CloudUploader
+from src.app_paths import PROCESSED_DIR, PENDING_REVIEW_DIR, ensure_runtime_dirs
 
 # ─── Global State ──────────────────────────────────────
 db = DatabaseManager()
@@ -33,11 +34,9 @@ current_user = None
 current_workspace = None
 current_session_id = None
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUTPUT_DIR = os.path.join(BASE_DIR, "data", "processed")
-PENDING_DIR = os.path.join(BASE_DIR, "data", "pending_review")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-os.makedirs(PENDING_DIR, exist_ok=True)
+ensure_runtime_dirs()
+OUTPUT_DIR = PROCESSED_DIR
+PENDING_DIR = PENDING_REVIEW_DIR
 
 
 # ─── Authentication ────────────────────────────────────
@@ -415,7 +414,11 @@ def _process_single_document(file_path, workspace_id=None):
     if not workspace:
         return {"success": False, "error": "No hay espacio de trabajo seleccionado."}
 
-    policies = db.get_security_policies()
+    all_policies = db.get_security_policies()
+    policies = [
+        policy for policy in all_policies
+        if not policy.get("workspaceId") or policy.get("workspaceId") == workspace.get("id")
+    ]
     config = db.get_config()
     nomenclatures = db.get_nomenclatures()
 

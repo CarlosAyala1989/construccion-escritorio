@@ -1,28 +1,47 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller spec file for Gobernanza Documental Desktop Client
 
+import os
+from PyInstaller.utils.hooks import collect_submodules
+
+
 block_cipher = None
+
+datas = [
+    ('web', 'web'),
+]
+
+if os.path.isdir('data/templates'):
+    datas.append(('data/templates', 'data/templates'))
+
+hiddenimports = [
+    'eel',
+    'bottle',
+    'bottle_websocket',
+    'tkinter',
+    'tkinter.filedialog',
+    'src.app_paths',
+    'src.controller',
+    'src.core.ocr_engine',
+    'src.core.vision_engine',
+    'src.core.crypto_engine',
+    'src.core.file_structurer',
+    'src.core.pending_tray',
+    'src.core.secure_file_writer',
+    'src.database.sqlite_manager',
+    'src.hardware.scanner',
+    'src.sync.cloud_uploader',
+    'src.sync.saas_api',
+]
+
+hiddenimports += collect_submodules('win32com')
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[
-        ('web', 'web'),
-        ('data/templates', 'data/templates'),
-    ],
-    hiddenimports=[
-        'eel',
-        'bottle',
-        'src.controller',
-        'src.core.ocr_engine',
-        'src.core.vision_engine',
-        'src.core.crypto_engine',
-        'src.database.sqlite_manager',
-        'src.hardware.scanner',
-        'src.sync.cloud_uploader',
-        'src.sync.saas_api',
-    ],
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -45,7 +64,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,

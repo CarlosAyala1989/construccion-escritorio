@@ -8,6 +8,7 @@ Usa las credenciales (refresh_token + folder ID) almacenadas por el admin en la 
 import os
 import shutil
 import json
+from src.app_paths import CLOUD_OUTPUT_DIR, ensure_runtime_dirs
 
 try:
     from PyPDF2 import PdfReader, PdfWriter
@@ -255,11 +256,10 @@ class CloudUploader:
 
     def _upload_local(self, file_path, cloud_path, workspace_name=None):
         """Copy file to a local output directory simulating cloud upload."""
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        base_dir = os.path.dirname(base_dir)  # Go up to project root
+        ensure_runtime_dirs()
 
         # Build output path
-        output_base = os.path.join(base_dir, "data", "cloud_output")
+        output_base = CLOUD_OUTPUT_DIR
         if workspace_name:
             output_dir = os.path.join(output_base, workspace_name)
         elif cloud_path:

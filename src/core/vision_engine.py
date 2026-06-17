@@ -7,6 +7,7 @@ VISUAL tiene prioridad absoluta sobre SEMANTIC.
 import os
 import cv2
 import numpy as np
+from src.app_paths import TEMPLATES_DIR, ensure_runtime_dirs
 
 try:
     from PIL import Image
@@ -16,9 +17,7 @@ except ImportError:
 
 
 # Directory for visual template images
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-TEMPLATES_DIR = os.path.join(BASE_DIR, "data", "templates")
-os.makedirs(TEMPLATES_DIR, exist_ok=True)
+ensure_runtime_dirs()
 
 
 class VisionEngine:

@@ -11,21 +11,92 @@ import uuid
 import os
 import json
 from datetime import datetime
+from urllib.parse import unquote, urlparse
+from src.app_paths import BASE_DIR, DATA_DIR, ensure_runtime_dirs
 
-# ─── MySQL Remote Config ───────────────────────────────
-MYSQL_CONFIG = {
-    "host": "149.34.48.176",
-    "port": 3307,
-    "user": "admin",
-    "password": "marymar123",
-    "database": "gobernanza_db",
-}
-
-# ─── SQLite Local Path ─────────────────────────────────
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-os.makedirs(DATA_DIR, exist_ok=True)
+# Local paths
+REPO_ROOT = os.path.dirname(BASE_DIR)
+ensure_runtime_dirs()
 SQLITE_PATH = os.path.join(DATA_DIR, "local_queue.db")
+
+
+def _parse_dotenv_file(path):
+    values = {}
+    if not os.path.exists(path):
+        return values
+
+    with open(path, encoding="utf-8") as env_file:
+        for raw_line in env_file:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):].strip()
+            if "=" not in line:
+                continue
+
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+            if (
+                len(value) >= 2
+                and value[0] == value[-1]
+                and value[0] in {'"', "'"}
+            ):
+                value = value[1:-1]
+            values[key] = value
+
+    return values
+
+
+def _load_env():
+    env = {}
+    for env_path in [
+        os.path.join(REPO_ROOT, "construccion-web", ".env"),
+        os.path.join(REPO_ROOT, "construccion-web", ".env.local"),
+        os.path.join(REPO_ROOT, ".env"),
+        os.path.join(BASE_DIR, ".env"),
+        os.path.join(DATA_DIR, ".env"),
+    ]:
+        env.update(_parse_dotenv_file(env_path))
+
+    env.update(os.environ)
+    return env
+
+
+def _env_int(value, default):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _mysql_config_from_env():
+    env = _load_env()
+    database_url = env.get("DATABASE_URL", "").strip()
+
+    if database_url:
+        parsed = urlparse(database_url)
+        if parsed.scheme.startswith("mysql"):
+            return {
+                "host": parsed.hostname or "",
+                "port": parsed.port or 3306,
+                "user": unquote(parsed.username or ""),
+                "password": unquote(parsed.password or ""),
+                "database": unquote(parsed.path.lstrip("/")),
+            }
+
+    return {
+        "host": env.get("MYSQL_HOST") or env.get("DB_HOST") or "",
+        "port": _env_int(env.get("MYSQL_PORT") or env.get("DB_PORT"), 3306),
+        "user": env.get("MYSQL_USER") or env.get("DB_USER") or "",
+        "password": env.get("MYSQL_PASSWORD") or env.get("DB_PASSWORD") or "",
+        "database": env.get("MYSQL_DATABASE") or env.get("DB_NAME") or "",
+    }
+
+
+# MySQL remote config comes from .env / environment variables.
+MYSQL_CONFIG = _mysql_config_from_env()
 
 
 class DatabaseManager:
@@ -122,6 +193,10 @@ class DatabaseManager:
 
     def get_mysql(self):
         """Get MySQL connection, reconnecting if needed."""
+        if not all(MYSQL_CONFIG.get(key) for key in ["host", "user", "database"]):
+            print("[DB] MySQL config missing; using local cache if available")
+            return None
+
         try:
             if self._mysql_conn is None or not self._mysql_conn.is_connected():
                 self._mysql_conn = mysql.connector.connect(**MYSQL_CONFIG)
