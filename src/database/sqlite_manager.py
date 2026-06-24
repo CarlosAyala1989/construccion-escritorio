@@ -226,7 +226,7 @@ class DatabaseManager:
 
         cursor = conn.cursor(dictionary=True)
         cursor.execute(
-            "SELECT id, name, email, password, role, isActive FROM User WHERE email = %s",
+            "SELECT id, name, email, password, role, isActive, accessRole FROM User WHERE email = %s",
             (email,)
         )
         user = cursor.fetchone()
@@ -235,6 +235,8 @@ class DatabaseManager:
         if not user:
             return None
         if not user["isActive"]:
+            return None
+        if user.get("accessRole") != "DESKTOP_SCANNER":
             return None
 
         # Verify bcrypt password
