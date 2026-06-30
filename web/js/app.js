@@ -41,6 +41,7 @@ async function handleLogin(e) {
     e.preventDefault();
     const email = document.getElementById('loginEmail').value;
     const password = document.getElementById('loginPassword').value;
+    const totpCode = document.getElementById('loginTotpCode').value.replace(/\D/g, '').slice(0, 6);
     const errorEl = document.getElementById('loginError');
     const btn = document.getElementById('btnLogin');
 
@@ -49,7 +50,7 @@ async function handleLogin(e) {
     errorEl.classList.add('hidden');
 
     try {
-        const result = await eel.login(email, password)();
+        const result = await eel.login(email, password, totpCode)();
         if (result.success) {
             showDashboard(result.user);
         } else {
@@ -95,6 +96,7 @@ async function handleLogout() {
     // Clear form fields
     document.getElementById('loginEmail').value = '';
     document.getElementById('loginPassword').value = '';
+    document.getElementById('loginTotpCode').value = '';
 }
 
 // ─── Show Dashboard ───────────────────────────────────

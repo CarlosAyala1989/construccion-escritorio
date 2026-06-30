@@ -5,13 +5,17 @@ La BD MySQL remota es la fuente de verdad para configuración.
 SQLite local es para la cola de pendientes y caché offline.
 """
 
-import sqlite3
-import mysql.connector
-import uuid
-import os
 import json
+import os
+import re
+import sqlite3
+import uuid
 from datetime import datetime
 from urllib.parse import unquote, urlparse
+
+import mysql.connector
+import pyotp
+
 from src.app_paths import BASE_DIR, DATA_DIR, ensure_runtime_dirs
 
 # Local paths
@@ -97,6 +101,25 @@ def _mysql_config_from_env():
 
 # MySQL remote config comes from .env / environment variables.
 MYSQL_CONFIG = _mysql_config_from_env()
+
+
+class AuthenticationError(Exception):
+    """Expected authentication failure that can be shown to the user."""
+
+
+def _verify_totp_code(secret, code):
+    """Verify a six-digit TOTP using the same 30-second window as the web app."""
+    normalized_code = re.sub(r"\s+", "", str(code or ""))
+    if not secret or not re.fullmatch(r"\d{6}", normalized_code):
+        return False
+
+    try:
+        return pyotp.TOTP(secret, digits=6, interval=30).verify(
+            normalized_code,
+            valid_window=1,
+        )
+    except Exception:
+        return False
 
 
 class DatabaseManager:
@@ -217,37 +240,52 @@ class DatabaseManager:
 
     # ─── Auth ──────────────────────────────────────────
 
-    def authenticate_user(self, email, password):
-        """Authenticate user against MySQL. Returns user dict or None."""
+    def authenticate_user(self, email, password, totp_code):
+        """Authenticate a desktop user with password and administrator-managed TOTP."""
         import bcrypt
         conn = self.get_mysql()
         if not conn:
-            return None
+            raise ConnectionError("No se pudo conectar con la base de datos.")
 
         cursor = conn.cursor(dictionary=True)
         cursor.execute(
-            "SELECT id, name, email, password, role, isActive, accessRole FROM User WHERE email = %s",
+            """
+            SELECT id, name, email, password, role, isActive, accessRole,
+                   twoFactorEnabled, twoFactorSecret
+            FROM User
+            WHERE email = %s
+            """,
             (email,)
         )
         user = cursor.fetchone()
         cursor.close()
 
         if not user:
-            return None
+            raise AuthenticationError("Credenciales inválidas o cuenta desactivada.")
         if not user["isActive"]:
-            return None
+            raise AuthenticationError("Credenciales inválidas o cuenta desactivada.")
         if user.get("accessRole") != "DESKTOP_SCANNER":
-            return None
+            raise AuthenticationError("Esta cuenta no tiene acceso a la aplicación de escritorio.")
 
         # Verify bcrypt password
-        if bcrypt.checkpw(password.encode("utf-8"), user["password"].encode("utf-8")):
-            return {
-                "id": user["id"],
-                "name": user["name"],
-                "email": user["email"],
-                "role": user["role"],
-            }
-        return None
+        if not bcrypt.checkpw(password.encode("utf-8"), user["password"].encode("utf-8")):
+            raise AuthenticationError("Credenciales inválidas o cuenta desactivada.")
+
+        if not user.get("twoFactorEnabled") or not user.get("twoFactorSecret"):
+            raise AuthenticationError(
+                "Authenticator no está configurado para esta cuenta. "
+                "Solicita al administrador activarlo."
+            )
+
+        if not _verify_totp_code(user["twoFactorSecret"], totp_code):
+            raise AuthenticationError("Código de Authenticator inválido o vencido.")
+
+        return {
+            "id": user["id"],
+            "name": user["name"],
+            "email": user["email"],
+            "role": user["role"],
+        }
 
     # ─── Workspaces ────────────────────────────────────
 

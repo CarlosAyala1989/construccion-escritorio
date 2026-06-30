@@ -11,7 +11,7 @@ import threading
 import json
 from datetime import datetime
 
-from src.database.sqlite_manager import DatabaseManager
+from src.database.sqlite_manager import AuthenticationError, DatabaseManager
 from src.core.ocr_engine import OCREngine
 from src.core.vision_engine import VisionEngine
 from src.core.crypto_engine import CryptoEngine
@@ -42,20 +42,19 @@ PENDING_DIR = PENDING_REVIEW_DIR
 # ─── Authentication ────────────────────────────────────
 
 @eel.expose
-def login(email, password):
-    """Authenticate user against MySQL database."""
+def login(email, password, totp_code=""):
+    """Authenticate a desktop user with password and TOTP against MySQL."""
     global current_user
     try:
-        user = db.authenticate_user(email, password)
-        if user:
-            current_user = user
-            db.create_audit_log(
-                user["id"], user["name"], "LOGIN",
-                f"Inicio de sesión desde escritorio", "SUCCESS"
-            )
-            return {"success": True, "user": user}
-        else:
-            return {"success": False, "error": "Credenciales inválidas o cuenta desactivada."}
+        user = db.authenticate_user(email, password, totp_code)
+        current_user = user
+        db.create_audit_log(
+            user["id"], user["name"], "LOGIN",
+            "Inicio de sesión desde escritorio", "SUCCESS"
+        )
+        return {"success": True, "user": user}
+    except AuthenticationError as e:
+        return {"success": False, "error": str(e)}
     except Exception as e:
         return {"success": False, "error": f"Error de conexión: {str(e)}"}
 
