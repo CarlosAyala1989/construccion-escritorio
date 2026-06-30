@@ -26,6 +26,7 @@ hiddenimports = [
     'src.core.vision_engine',
     'src.core.crypto_engine',
     'src.core.file_structurer',
+    'src.core.native_file_dialog',
     'src.core.pending_tray',
     'src.core.secure_file_writer',
     'src.database.sqlite_manager',

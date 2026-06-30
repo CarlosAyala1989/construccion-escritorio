@@ -1,3 +1,4 @@
+import hashlib
 import os
 import tempfile
 import unittest
@@ -87,6 +88,10 @@ class CloudUploaderHierarchyTests(unittest.TestCase):
                 "access-token",
             )
             self.assertEqual("due-folder", upload.call_args.args[1]["parents"][0])
+            self.assertEqual(
+                hashlib.sha256(b"%PDF-test").hexdigest(),
+                upload.call_args.args[1]["appProperties"]["sha256"],
+            )
             self.assertTrue(result["success"])
             self.assertTrue(result["destination"].endswith(
                 "/".join(HIERARCHY + ["USE-SECCOMUL.pdf"])

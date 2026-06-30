@@ -18,6 +18,7 @@ from src.core.crypto_engine import CryptoEngine
 from src.core.file_structurer import FileStructurer
 from src.core.pending_tray import PendingTray
 from src.core.secure_file_writer import SecureFileWriter
+from src.core.native_file_dialog import select_document_files
 from src.hardware.scanner import ScannerManager
 from src.sync.cloud_uploader import CloudUploader
 from src.app_paths import PROCESSED_DIR, PENDING_REVIEW_DIR, ensure_runtime_dirs
@@ -221,27 +222,12 @@ def pick_and_import_files():
         return {"success": False, "error": "Inicia una sesión primero."}
 
     try:
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes('-topmost', True)
-
-        files = filedialog.askopenfilenames(
-            title="Seleccionar archivos para importar",
-            filetypes=[
-                ("Documentos", "*.pdf *.png *.jpg *.jpeg *.tiff *.bmp"),
-                ("PDF", "*.pdf"),
-                ("Imágenes", "*.png *.jpg *.jpeg *.tiff *.bmp"),
-                ("Todos", "*.*"),
-            ]
-        )
-        root.destroy()
+        files = select_document_files()
 
         if not files:
             return {"success": True, "count": 0, "message": "No se seleccionaron archivos."}
 
-        imported = scanner.import_files(list(files))
+        imported = scanner.import_files(files)
         for path in imported:
             _on_file_detected(path)
 
@@ -597,6 +583,7 @@ def _process_all_pending():
                         "compressed": result.get("compressed", False),
                         "uploaded": upload_result.get("success", False),
                         "provider": upload_result.get("provider", "NONE"),
+                        "sha256": upload_result.get("sha256"),
                     }),
                     "SUCCESS",
                     item.get("workspace_id")

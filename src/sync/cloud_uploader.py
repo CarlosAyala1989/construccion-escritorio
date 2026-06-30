@@ -5,9 +5,10 @@ Patrón Strategy para diferentes proveedores (Google Drive, Dropbox, Local).
 Usa las credenciales (refresh_token + folder ID) almacenadas por el admin en la web.
 """
 
+import hashlib
+import json
 import os
 import shutil
-import json
 from src.app_paths import CLOUD_OUTPUT_DIR, PROCESSED_DIR, ensure_runtime_dirs
 
 try:
@@ -27,6 +28,7 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
 GOOGLE_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files"
 GOOGLE_FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
+DRIVE_SHA256_PROPERTY = "sha256"
 
 
 class CloudUploader:
@@ -87,6 +89,7 @@ class CloudUploader:
         try:
             filename = os.path.basename(file_path)
             file_size = os.path.getsize(file_path)
+            sha256 = self._calculate_sha256(file_path)
             relative_path = self._processed_relative_path(file_path)
             relative_folder = os.path.dirname(relative_path)
             folder_parts = [
@@ -104,6 +107,7 @@ class CloudUploader:
             metadata = {
                 "name": filename,
                 "parents": [target_folder_id],
+                "appProperties": {DRIVE_SHA256_PROPERTY: sha256},
             }
 
             # Use multipart upload for files < 5MB, resumable for larger
@@ -119,6 +123,7 @@ class CloudUploader:
                     "success": True,
                     "destination": f"Google Drive: {drive_path}",
                     "drive_file_id": result["id"],
+                    "sha256": sha256,
                     "provider": "GOOGLE_DRIVE",
                 }
             else:
@@ -384,6 +389,15 @@ class CloudUploader:
         }
 
     # ─── Utilities ───────────────────────────────────
+
+    @staticmethod
+    def _calculate_sha256(file_path):
+        """Calculate the SHA-256 fingerprint of the exact bytes sent to storage."""
+        digest = hashlib.sha256()
+        with open(file_path, "rb") as file:
+            for chunk in iter(lambda: file.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
     @staticmethod
     def _processed_relative_path(file_path):
