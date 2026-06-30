@@ -1,4 +1,5 @@
 docs/
+tests/
 
 # Entornos virtuales
 venv/

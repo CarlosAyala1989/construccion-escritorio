@@ -1,6 +1,6 @@
 """
 Punto de Entrada Principal — Plataforma de Gobernanza Documental (Escritorio).
-Levanta Eel y expone las funciones del controller a la UI.
+Levanta Eel y expone las funciones del controller a la UI/UX.
 """
 
 import os
