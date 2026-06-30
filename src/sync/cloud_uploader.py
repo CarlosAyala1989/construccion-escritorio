@@ -8,7 +8,7 @@ Usa las credenciales (refresh_token + folder ID) almacenadas por el admin en la 
 import os
 import shutil
 import json
-from src.app_paths import CLOUD_OUTPUT_DIR, ensure_runtime_dirs
+from src.app_paths import CLOUD_OUTPUT_DIR, PROCESSED_DIR, ensure_runtime_dirs
 
 try:
     from PyPDF2 import PdfReader, PdfWriter
@@ -24,7 +24,9 @@ except ImportError:
 
 # Google OAuth2 token endpoint
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
 GOOGLE_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files"
+GOOGLE_FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
 
 
 class CloudUploader:
@@ -85,11 +87,23 @@ class CloudUploader:
         try:
             filename = os.path.basename(file_path)
             file_size = os.path.getsize(file_path)
+            relative_path = self._processed_relative_path(file_path)
+            relative_folder = os.path.dirname(relative_path)
+            folder_parts = [
+                part
+                for part in relative_folder.split(os.sep)
+                if part and part not in {".", ".."}
+            ]
+            target_folder_id = self._ensure_gdrive_folders(
+                folder_id,
+                folder_parts,
+                access_token,
+            )
 
             # Metadata part
             metadata = {
                 "name": filename,
-                "parents": [folder_id],
+                "parents": [target_folder_id],
             }
 
             # Use multipart upload for files < 5MB, resumable for larger
@@ -100,9 +114,10 @@ class CloudUploader:
 
             if result.get("id"):
                 print(f"[UPLOAD] ✅ Subido a Google Drive: {filename} (ID: {result['id']})")
+                drive_path = "/".join(folder_parts + [filename])
                 return {
                     "success": True,
-                    "destination": f"Google Drive: {filename}",
+                    "destination": f"Google Drive: {drive_path}",
                     "drive_file_id": result["id"],
                     "provider": "GOOGLE_DRIVE",
                 }
@@ -116,6 +131,79 @@ class CloudUploader:
         except Exception as e:
             print(f"[UPLOAD] ❌ Error subiendo a Google Drive: {e}")
             return {"success": False, "error": str(e), "provider": "GOOGLE_DRIVE"}
+
+    def _ensure_gdrive_folders(self, root_folder_id, folder_parts, access_token):
+        """Find or create each folder below the workspace root."""
+        current_folder_id = root_folder_id
+        for folder_name in folder_parts:
+            existing_id = self._find_gdrive_folder(
+                current_folder_id,
+                folder_name,
+                access_token,
+            )
+            current_folder_id = existing_id or self._create_gdrive_folder(
+                current_folder_id,
+                folder_name,
+                access_token,
+            )
+        return current_folder_id
+
+    def _find_gdrive_folder(self, parent_id, folder_name, access_token):
+        escaped_parent = self._escape_drive_query_value(parent_id)
+        escaped_name = self._escape_drive_query_value(folder_name)
+        query = (
+            f"'{escaped_parent}' in parents and name = '{escaped_name}' "
+            f"and mimeType = '{GOOGLE_FOLDER_MIME_TYPE}' and trashed = false"
+        )
+        response = http_requests.get(
+            GOOGLE_FILES_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={
+                "q": query,
+                "fields": "files(id,name)",
+                "pageSize": 1,
+                "supportsAllDrives": "true",
+                "includeItemsFromAllDrives": "true",
+            },
+            timeout=30,
+        )
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"No se pudo buscar la carpeta '{folder_name}' en Drive: "
+                f"{response.text}"
+            )
+
+        files = response.json().get("files", [])
+        return files[0].get("id") if files else None
+
+    def _create_gdrive_folder(self, parent_id, folder_name, access_token):
+        response = http_requests.post(
+            GOOGLE_FILES_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={"supportsAllDrives": "true"},
+            json={
+                "name": folder_name,
+                "mimeType": GOOGLE_FOLDER_MIME_TYPE,
+                "parents": [parent_id],
+            },
+            timeout=30,
+        )
+        if response.status_code not in (200, 201):
+            raise RuntimeError(
+                f"No se pudo crear la carpeta '{folder_name}' en Drive: "
+                f"{response.text}"
+            )
+
+        folder_id = response.json().get("id")
+        if not folder_id:
+            raise RuntimeError(
+                f"Drive no devolvió un ID para la carpeta '{folder_name}'"
+            )
+        return folder_id
+
+    @staticmethod
+    def _escape_drive_query_value(value):
+        return str(value).replace("\\", "\\\\").replace("'", "\\'")
 
     def _refresh_access_token(self, refresh_token, client_id, client_secret):
         """Exchange a refresh token for a new access token."""
@@ -171,7 +259,7 @@ class CloudUploader:
         body.write(f"\r\n--{boundary}--\r\n".encode())
 
         resp = http_requests.post(
-            f"{GOOGLE_UPLOAD_URL}?uploadType=multipart",
+            f"{GOOGLE_UPLOAD_URL}?uploadType=multipart&supportsAllDrives=true",
             headers={
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": f"multipart/related; boundary={boundary}",
@@ -199,7 +287,7 @@ class CloudUploader:
 
         # Step 1: Initiate the upload
         init_resp = http_requests.post(
-            f"{GOOGLE_UPLOAD_URL}?uploadType=resumable",
+            f"{GOOGLE_UPLOAD_URL}?uploadType=resumable&supportsAllDrives=true",
             headers={
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json; charset=UTF-8",
@@ -243,8 +331,9 @@ class CloudUploader:
         else:
             output_dir = dest_path
 
-        os.makedirs(output_dir, exist_ok=True)
-        dest = os.path.join(output_dir, os.path.basename(file_path))
+        relative_path = self._processed_relative_path(file_path)
+        dest = os.path.join(output_dir, relative_path)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
         dest = self._prevent_collision(dest)
 
         try:
@@ -267,9 +356,9 @@ class CloudUploader:
         else:
             output_dir = output_base
 
-        os.makedirs(output_dir, exist_ok=True)
-
-        dest = os.path.join(output_dir, os.path.basename(file_path))
+        relative_path = self._processed_relative_path(file_path)
+        dest = os.path.join(output_dir, relative_path)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
         dest = self._prevent_collision(dest)
 
         try:
@@ -295,6 +384,25 @@ class CloudUploader:
         }
 
     # ─── Utilities ───────────────────────────────────
+
+    @staticmethod
+    def _processed_relative_path(file_path):
+        """Return a safe path relative to the processed document directory."""
+        root_path = os.path.abspath(PROCESSED_DIR)
+        absolute_path = os.path.abspath(file_path)
+        try:
+            if os.path.commonpath([root_path, absolute_path]) != root_path:
+                return os.path.basename(file_path)
+        except ValueError:
+            return os.path.basename(file_path)
+
+        relative_path = os.path.relpath(absolute_path, root_path)
+        parts = [
+            part
+            for part in relative_path.split(os.sep)
+            if part and part not in {".", ".."}
+        ]
+        return os.path.join(*parts) if parts else os.path.basename(file_path)
 
     def _prevent_collision(self, path):
         """Prevent filename collision."""

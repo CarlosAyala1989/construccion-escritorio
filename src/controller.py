@@ -443,14 +443,20 @@ def _process_single_document(file_path, workspace_id=None):
 
     # Try nomenclature extraction
     nomenclature_data = ocr.extract_nomenclature(text, nomenclatures)
+    title_hierarchy = ocr.extract_title_hierarchy(text)
     structured_path = None
-    if nomenclature_data:
+    if title_hierarchy:
+        structured_path = FileStructurer.structure_title_hierarchy(
+            title_hierarchy,
+            OUTPUT_DIR,
+        )
+    elif nomenclature_data:
         sep = nomenclatures[0].get("separator", "_") if nomenclatures else "_"
         # Get the structured path (doesn't create the file, just the path)
         structured_path = FileStructurer.RenameAndStructure(nomenclature_data, OUTPUT_DIR, sep)
 
     # If nomenclature failed and we have nomenclature rules, mark for review
-    if nomenclatures and not nomenclature_data:
+    if nomenclatures and not structured_path:
         # CP-031: HandleOCRFailure() mueve doc a PENDIENTES
         # Borramos el temporal en claro
         try:
