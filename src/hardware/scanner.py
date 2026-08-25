@@ -81,13 +81,17 @@ class ScannerManager:
         return True
 
     def stop_watching(self):
-        """Detiene el watcher; los folios cifrados permanecen disponibles para procesamiento."""
+        """Detiene la captura; conserva los folios cifrados para el procesamiento posterior."""
         if self._observer and self._running:
             self._observer.stop()
             self._observer.join(timeout=2)
             self._observer = None
             self._running = False
             print("[SCANNER] Stopped watching folder")
+
+        if self._capture_storage_active:
+            SecureFileWriter.deactivate_session(self._secure_session_id)
+            self._capture_storage_active = False
 
     def _begin_secure_capture_storage(self):
         """Crea un directorio aislado y activa una clave AES-256 para la sesión de captura."""
