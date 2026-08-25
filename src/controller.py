@@ -22,22 +22,35 @@ from src.core.native_file_dialog import select_document_files
 from src.hardware.scanner import ScannerManager
 from src.sync.cloud_uploader import CloudUploader
 from src.app_paths import PROCESSED_DIR, PENDING_REVIEW_DIR, ensure_runtime_dirs
+from src.capture_context import (
+    CaptureContextError,
+    DesktopSessionContext,
+    find_assigned_workspace,
+    require_active_capture_context,
+    validate_selected_workspace,
+)
 
-# ─── Global State ──────────────────────────────────────
+# ─── Services / Runtime Context ───────────────────────
 db = DatabaseManager()
 ocr = OCREngine()
 vision = VisionEngine()
 crypto = CryptoEngine()
 scanner = ScannerManager()
 uploader = None  # Initialized after config load
-
-current_user = None
-current_workspace = None
-current_session_id = None
+capture_context = DesktopSessionContext()
 
 ensure_runtime_dirs()
 OUTPUT_DIR = PROCESSED_DIR
 PENDING_DIR = PENDING_REVIEW_DIR
+
+
+def _capture_guard_failure():
+    """Return a consistent Eel error when RF-03 capture preconditions are not met."""
+    try:
+        require_active_capture_context(db, capture_context)
+        return None
+    except CaptureContextError as error:
+        return {"success": False, "error": str(error)}
 
 
 # ─── Authentication ────────────────────────────────────
@@ -45,49 +58,44 @@ PENDING_DIR = PENDING_REVIEW_DIR
 @eel.expose
 def login(email, password, totp_code=""):
     """Authenticate a desktop user with password and TOTP against MySQL."""
-    global current_user
     try:
         user = db.authenticate_user(email, password, totp_code)
-        current_user = user
+        capture_context.set_user(user)
         db.create_audit_log(
             user["id"], user["name"], "LOGIN",
             "Inicio de sesión desde escritorio", "SUCCESS"
         )
         return {"success": True, "user": user}
-    except AuthenticationError as e:
-        return {"success": False, "error": str(e)}
-    except Exception as e:
-        return {"success": False, "error": f"Error de conexión: {str(e)}"}
+    except AuthenticationError as error:
+        return {"success": False, "error": str(error)}
+    except Exception as error:
+        return {"success": False, "error": f"Error de conexión: {str(error)}"}
 
 
 @eel.expose
 def logout():
-    """Log out current user."""
-    global current_user, current_workspace, current_session_id
-
-    # Stop active session if any
-    if current_session_id:
+    """Log out current user and always clear the local capture context."""
+    if capture_context.session_id:
         try:
             scanner.stop_watching()
-            db.close_session(current_session_id)
-        except Exception:
-            pass
+            db.close_session(capture_context.session_id)
+        except Exception as error:
+            print(f"[RF-03] Error al cerrar la sesión durante logout: {error}")
 
-    if current_user:
+    if capture_context.user:
         db.create_audit_log(
-            current_user["id"], current_user["name"], "LOGOUT",
+            capture_context.user["id"], capture_context.user["name"], "LOGOUT",
             "Cierre de sesión", "SUCCESS"
         )
-    current_user = None
-    current_workspace = None
-    current_session_id = None
+
+    capture_context.reset()
     return {"success": True}
 
 
 @eel.expose
 def get_current_user():
     """Get the current logged-in user."""
-    return current_user
+    return capture_context.user
 
 
 # ─── Workspaces ────────────────────────────────────────
@@ -95,81 +103,103 @@ def get_current_user():
 @eel.expose
 def get_workspaces():
     """Get workspaces assigned to the current user."""
-    if not current_user:
+    if not capture_context.user:
         return []
-    return db.get_user_workspaces(current_user["id"])
+    return db.get_user_workspaces(capture_context.user["id"])
 
 
 @eel.expose
-def select_workspace(workspace_id, workspace_name):
-    """Select a workspace for the current session."""
-    global current_workspace
-    workspaces = get_workspaces()
-    for ws in workspaces:
-        if ws["id"] == workspace_id:
-            current_workspace = ws
-            return {"success": True, "workspace": ws}
-    return {"success": False, "error": "Espacio de trabajo no encontrado."}
+def select_workspace(workspace_id, _workspace_name=None):
+    """Select an assigned workspace; selection is locked while scanning is active."""
+    if not workspace_id:
+        return {"success": False, "error": "Debes seleccionar un espacio de trabajo válido."}
+
+    try:
+        assigned_workspace = find_assigned_workspace(db, capture_context, workspace_id)
+        if not assigned_workspace:
+            return {"success": False, "error": "Espacio de trabajo no encontrado o sin permisos vigentes."}
+
+        capture_context.set_workspace(assigned_workspace)
+        return {"success": True, "workspace": assigned_workspace}
+    except CaptureContextError as error:
+        return {"success": False, "error": str(error)}
 
 
 # ─── Sessions ─────────────────────────────────────────
 
 @eel.expose
 def start_session():
-    """Start a new scanning session. Requires workspace selection."""
-    global current_session_id
-    if not current_user:
-        return {"success": False, "error": "Debes iniciar sesión primero."}
-    if not current_workspace:
-        return {"success": False, "error": "Debes seleccionar un espacio de trabajo primero."}
+    """Start a scanning session only after revalidating the selected workspace."""
+    if capture_context.has_active_session:
+        return {"success": False, "error": "Ya existe una sesión de escaneo activa."}
 
-    current_session_id = db.create_session(
-        current_user["id"],
-        current_workspace["id"],
-        current_workspace["name"]
-    )
+    try:
+        workspace = validate_selected_workspace(db, capture_context)
+    except CaptureContextError as error:
+        return {"success": False, "error": str(error)}
 
-    # Start folder watcher
-    scanner.on_file_callback = _on_file_detected
-    scanner.start_watching()
+    try:
+        session_id = db.create_session(
+            capture_context.user["id"],
+            workspace["id"],
+            workspace["name"]
+        )
+        capture_context.start_session(session_id)
 
-    db.create_audit_log(
-        current_user["id"], current_user["name"], "SESSION_STARTED",
-        f"Sesión iniciada en espacio: {current_workspace['name']}",
-        "SUCCESS", current_workspace["id"]
-    )
+        scanner.on_file_callback = _on_file_detected
+        scanner.start_watching()
 
-    return {
-        "success": True,
-        "session_id": current_session_id,
-        "watch_folder": scanner.watch_folder,
-    }
+        db.create_audit_log(
+            capture_context.user["id"], capture_context.user["name"], "SESSION_STARTED",
+            f"Sesión iniciada en espacio: {workspace['name']}",
+            "SUCCESS", workspace["id"]
+        )
+
+        return {
+            "success": True,
+            "session_id": capture_context.session_id,
+            "watch_folder": scanner.watch_folder,
+        }
+    except Exception as error:
+        session_id = capture_context.session_id
+        capture_context.end_session()
+        if session_id:
+            try:
+                scanner.stop_watching()
+                db.close_session(session_id)
+            except Exception as cleanup_error:
+                print(f"[RF-03] Error al revertir inicio de sesión: {cleanup_error}")
+
+        print(f"[RF-03] No se pudo iniciar la sesión de captura: {error}")
+        return {"success": False, "error": "No se pudo iniciar la sesión de escaneo."}
 
 
 @eel.expose
 def end_session():
     """End the current session and trigger cloud sync."""
-    global current_session_id
-    if not current_session_id:
+    if not capture_context.session_id:
         return {"success": False, "error": "No hay sesión activa."}
 
+    session_id = capture_context.session_id
+    workspace = capture_context.workspace
+
     scanner.stop_watching()
-    db.close_session(current_session_id)
+    db.close_session(session_id)
 
     # Process and upload all pending documents
     result = _process_all_pending()
 
     db.create_audit_log(
-        current_user["id"], current_user["name"], "SESSION_ENDED",
+        capture_context.user["id"], capture_context.user["name"], "SESSION_ENDED",
         f"Sesión cerrada. Docs procesados: {result['processed']}, Errores: {result['errors']}",
         "SUCCESS" if result["errors"] == 0 else "FAILURE",
-        current_workspace["id"] if current_workspace else None
+        workspace["id"] if workspace else None
     )
 
     # Sync pending logs
     synced = db.sync_pending_logs()
 
-    current_session_id = None
+    capture_context.end_session()
     return {
         "success": True,
         "processed": result["processed"],
@@ -183,9 +213,10 @@ def end_session():
 
 @eel.expose
 def import_files(file_paths):
-    """Import files manually into the session."""
-    if not current_session_id:
-        return {"success": False, "error": "Inicia una sesión primero."}
+    """Import files manually only when the RF-03 capture context is valid."""
+    guard_failure = _capture_guard_failure()
+    if guard_failure:
+        return guard_failure
 
     imported = scanner.import_files(file_paths)
     for path in imported:
@@ -199,27 +230,33 @@ def get_scanners():
     """List available physical scanners."""
     return scanner.get_scanners()
 
+
 @eel.expose
 def scan_document(device_id=None):
-    """Trigger physical scan from a connected scanner."""
-    if not current_session_id:
-        return {"success": False, "error": "Inicia una sesión primero."}
+    """Trigger physical scan only when the RF-03 capture context is valid."""
+    guard_failure = _capture_guard_failure()
+    if guard_failure:
+        return guard_failure
 
     try:
         path = scanner.scan_physical_document(device_id)
         if path:
             _on_file_detected(path)
             return {"success": True, "path": path}
-        else:
-            return {"success": False, "error": "Fallo al escanear. Verifica que el escáner esté encendido y sin atascos."}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {
+            "success": False,
+            "error": "Fallo al escanear. Verifica que el escáner esté encendido y sin atascos.",
+        }
+    except Exception as error:
+        return {"success": False, "error": str(error)}
+
 
 @eel.expose
 def pick_and_import_files():
-    """Open a native file dialog to select files and import them."""
-    if not current_session_id:
-        return {"success": False, "error": "Inicia una sesión primero."}
+    """Open a native file dialog only when the RF-03 capture context is valid."""
+    guard_failure = _capture_guard_failure()
+    if guard_failure:
+        return guard_failure
 
     try:
         files = select_document_files()
@@ -232,8 +269,8 @@ def pick_and_import_files():
             _on_file_detected(path)
 
         return {"success": True, "count": len(imported)}
-    except Exception as e:
-        return {"success": False, "error": f"Error al seleccionar archivos: {str(e)}"}
+    except Exception as error:
+        return {"success": False, "error": f"Error al seleccionar archivos: {str(error)}"}
 
 
 @eel.expose
@@ -292,7 +329,7 @@ def correct_document(doc_id, new_name):
     Manually correct a document name (from pending review).
     Re-triggers the privacy shield after correction.
     """
-    if not current_user:
+    if not capture_context.user:
         return {"success": False, "error": "No autenticado."}
 
     items = db.get_queue_items()
@@ -334,10 +371,10 @@ def get_app_status():
     online = db.is_online()
     return {
         "online": online,
-        "user": current_user,
-        "workspace": current_workspace,
-        "session_active": current_session_id is not None,
-        "session_id": current_session_id,
+        "user": capture_context.user,
+        "workspace": capture_context.workspace,
+        "session_active": capture_context.has_active_session,
+        "session_id": capture_context.session_id,
         "watch_folder": scanner.watch_folder,
         "temp_folder": scanner.temp_folder,
     }
@@ -359,35 +396,38 @@ def get_config():
 # ─── Internal Processing ──────────────────────────────
 
 def _on_file_detected(file_path):
-    """Callback when a new file is detected."""
-    if not current_workspace:
+    """Queue a detected file only while the RF-03 capture context remains valid."""
+    guard_failure = _capture_guard_failure()
+    if guard_failure:
+        print(f"[RF-03] Archivo ignorado fuera de contexto de captura: {guard_failure['error']}")
         return
+
+    workspace = capture_context.workspace
 
     # Add to queue
     doc_id = db.add_to_queue(
         file_path,
         os.path.basename(file_path),
-        current_workspace["id"],
-        current_workspace["name"]
+        workspace["id"],
+        workspace["name"]
     )
 
-    if current_session_id:
-        db.increment_session_doc_count(current_session_id)
+    db.increment_session_doc_count(capture_context.session_id)
 
-    # Notify UI
+    # Notify UI without hiding observer failures.
     try:
         eel.onFileDetected({
             "id": doc_id,
             "name": os.path.basename(file_path),
             "path": file_path,
         })
-    except Exception:
-        pass
+    except Exception as error:
+        print(f"[RF-03] No se pudo notificar el archivo detectado a la UI: {error}")
 
 
 def _process_single_document(file_path, workspace_id=None):
     """Process a single document through the full pipeline."""
-    workspace = current_workspace
+    workspace = capture_context.workspace
     if workspace_id and workspace and workspace["id"] != workspace_id:
         # Find the correct workspace
         workspaces = get_workspaces()
@@ -550,12 +590,12 @@ def _process_all_pending():
             if result.get("success"):
                 # Upload to cloud — pass full workspace data for Drive credentials
                 ws_name = item.get("workspace_name", "default")
-                cloud_path = current_workspace.get("cloudPath", "") if current_workspace else ""
+                cloud_path = capture_context.workspace.get("cloudPath", "") if capture_context.workspace else ""
                 upload_result = uploader.upload(
                     result["output_path"],
                     cloud_path,
                     ws_name,
-                    workspace=current_workspace,
+                    workspace=capture_context.workspace,
                 )
 
                 if upload_result.get("success"):
@@ -574,8 +614,8 @@ def _process_all_pending():
                     print(f"[PROCESS] ⚠️ Procesado pero no subido: {item['original_name']} — {upload_result.get('error', '')}")
 
                 db.create_audit_log(
-                    current_user["id"] if current_user else None,
-                    current_user["name"] if current_user else "Sistema",
+                    capture_context.user["id"] if capture_context.user else None,
+                    capture_context.user["name"] if capture_context.user else "Sistema",
                     "DOCUMENT_PROCESSED",
                     json.dumps({
                         "file": item["original_name"],
