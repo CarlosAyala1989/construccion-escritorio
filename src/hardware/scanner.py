@@ -1,15 +1,18 @@
 """
 Scanner / File Watcher — Captura e Ingesta de Datos.
-Fase 1: Vigilancia de carpetas para archivos depositados manualmente.
-En Linux usa watchdog; en Windows usaría TWAIN/WIA.
+Fase 1: vigilancia de carpetas y captura física con almacenamiento temporal cifrado.
 """
 
+from io import BytesIO
 import os
 import shutil
+import subprocess
+import sys
 import time
-import threading
-from src.core.secure_file_writer import SecureFileWriter
+import uuid
+
 from src.app_paths import DATA_DIR, TEMP_WORKSPACE_DIR, WATCH_DIR, ensure_runtime_dirs
+from src.core.secure_file_writer import SecureFileWriter
 
 try:
     from watchdog.observers import Observer
@@ -19,11 +22,14 @@ except ImportError:
     HAS_WATCHDOG = False
 
 ensure_runtime_dirs()
-TEMP_DIR = TEMP_WORKSPACE_DIR
+TEMP_ROOT_DIR = TEMP_WORKSPACE_DIR
+SUPPORTED_DOCUMENT_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".bmp"}
+SCAN_RESOLUTION_DPI = 300
+SESSION_DIRECTORY_PREFIX = "session_"
 
 
 class PDFHandler(FileSystemEventHandler):
-    """Watches a folder for new PDF files."""
+    """Observa la carpeta de entrada y deriva documentos terminados al scanner."""
 
     def __init__(self, callback):
         self.callback = callback
@@ -31,33 +37,38 @@ class PDFHandler(FileSystemEventHandler):
     def on_created(self, event):
         if event.is_directory:
             return
-        ext = os.path.splitext(event.src_path)[1].lower()
-        if ext in [".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".bmp"]:
-            # Small delay to ensure file is fully written
-            time.sleep(1)
-            if os.path.exists(event.src_path):
-                self.callback(event.src_path)
+
+        extension = os.path.splitext(event.src_path)[1].lower()
+        if extension not in SUPPORTED_DOCUMENT_EXTENSIONS:
+            return
+
+        # El evento puede dispararse antes de que la aplicación origen termine de escribir.
+        time.sleep(1)
+        if os.path.exists(event.src_path):
+            self.callback(event.src_path)
 
 
 class ScannerManager:
-    """
-    Manages file ingestion from watch folder or manual file selection.
-    Simulates TWAIN/WIA scanner interface on Linux using folder monitoring.
-    """
+    """Gestiona ingesta y captura física dentro de un contexto temporal cifrado."""
 
     def __init__(self, on_file_callback=None):
         self._observer = None
         self._running = False
+        self._capture_storage_active = False
+        self._secure_session_id = None
+        self._session_temp_dir = None
         self.on_file_callback = on_file_callback
 
     def start_watching(self):
-        """Start watching the watch folder for new files."""
-        if not HAS_WATCHDOG:
-            print("[SCANNER] watchdog not available, folder monitoring disabled")
-            return False
-
+        """Inicia la sesión de ingesta y crea su directorio temporal cifrado."""
         if self._running:
             return True
+
+        self._begin_secure_capture_storage()
+
+        if not HAS_WATCHDOG:
+            print("[SCANNER] watchdog no disponible; monitoreo de carpeta deshabilitado")
+            return False
 
         handler = PDFHandler(self._on_new_file)
         self._observer = Observer()
@@ -66,223 +77,293 @@ class ScannerManager:
         self._observer.start()
         self._running = True
         print(f"[SCANNER] Watching folder: {WATCH_DIR}")
+        print(f"[RF-04] Directorio temporal cifrado: {self._session_temp_dir}")
         return True
 
     def stop_watching(self):
-        """Stop folder monitoring."""
+        """Detiene la captura; conserva los folios cifrados para el procesamiento posterior."""
         if self._observer and self._running:
             self._observer.stop()
             self._observer.join(timeout=2)
+            self._observer = None
             self._running = False
             print("[SCANNER] Stopped watching folder")
 
+        if self._capture_storage_active:
+            SecureFileWriter.deactivate_session(self._secure_session_id)
+            self._capture_storage_active = False
+
+    def _begin_secure_capture_storage(self):
+        """Crea un directorio aislado y activa una clave AES-256 para la sesión de captura."""
+        if self._capture_storage_active and self._session_temp_dir:
+            return self._session_temp_dir
+
+        secure_session_id = uuid.uuid4().hex
+        session_temp_dir = os.path.join(
+            TEMP_ROOT_DIR,
+            f"{SESSION_DIRECTORY_PREFIX}{secure_session_id}",
+        )
+
+        os.makedirs(session_temp_dir, mode=0o700, exist_ok=False)
+        try:
+            SecureFileWriter.begin_session(secure_session_id)
+        except Exception:
+            shutil.rmtree(session_temp_dir, ignore_errors=True)
+            raise
+
+        self._secure_session_id = secure_session_id
+        self._session_temp_dir = session_temp_dir
+        self._capture_storage_active = True
+        return session_temp_dir
+
+    def _require_session_temp_dir(self):
+        if not self._capture_storage_active or not self._session_temp_dir:
+            raise RuntimeError(
+                "No existe un directorio temporal cifrado activo. Inicia una sesión de captura primero."
+            )
+        return self._session_temp_dir
+
+    def _secure_destination(self, source_name):
+        session_temp_dir = self._require_session_temp_dir()
+        destination = os.path.join(session_temp_dir, os.path.basename(source_name))
+        return self._prevent_collision(destination)
+
+    def _secure_source_file(self, source_path):
+        destination = self._secure_destination(source_path)
+        SecureFileWriter.write_secure(source_path, destination)
+        return destination
+
     def _on_new_file(self, file_path):
-        """Handle a newly detected file."""
+        """Procesa un documento detectado por el watcher."""
         if self.is_paused:
             self.memory_queue.append(file_path)
             print(f"[SCANNER] En memoria (pausado): {os.path.basename(file_path)}")
             return
-            
+
         self._process_file_internal(file_path)
 
     def _process_file_internal(self, file_path):
         print(f"[SCANNER] New file detected: {os.path.basename(file_path)}")
 
-        # Copy to temp workspace
-        dest = os.path.join(TEMP_DIR, os.path.basename(file_path))
-        dest = self._prevent_collision(dest)
-
         try:
-            SecureFileWriter.write_secure(file_path, dest)
+            encrypted_path = self._secure_source_file(file_path)
             if self.on_file_callback:
-                self.on_file_callback(dest)
-        except Exception as e:
-            print(f"[SCANNER] Failed to copy/encrypt file: {e}")
+                self.on_file_callback(encrypted_path)
+        except Exception as error:
+            print(f"[SCANNER] Failed to encrypt captured file: {error}")
 
     def import_files(self, file_paths):
-        """
-        Manually import files into the temp workspace.
-        Returns list of paths in temp workspace.
-        """
-        imported = []
-        for src in file_paths:
-            if not os.path.exists(src):
-                continue
-            dest = os.path.join(TEMP_DIR, os.path.basename(src))
-            dest = self._prevent_collision(dest)
-            try:
-                SecureFileWriter.write_secure(src, dest)
-                imported.append(dest)
-                print(f"[SCANNER] Imported/Encrypted: {os.path.basename(dest)}")
-            except Exception as e:
-                print(f"[SCANNER] Import failed for {src}: {e}")
+        """Importa archivos existentes y retorna únicamente las rutas cifradas de la sesión."""
+        self._require_session_temp_dir()
+        imported_paths = []
 
-        return imported
+        for source_path in file_paths:
+            if not os.path.exists(source_path):
+                print(f"[SCANNER] Archivo de importación inexistente: {source_path}")
+                continue
+
+            try:
+                encrypted_path = self._secure_source_file(source_path)
+                imported_paths.append(encrypted_path)
+                print(f"[SCANNER] Imported/Encrypted: {os.path.basename(encrypted_path)}")
+            except Exception as error:
+                print(f"[SCANNER] Import failed for {source_path}: {error}")
+
+        return imported_paths
 
     def get_scanners(self):
-        """
-        Obtiene la lista de escáneres disponibles (SANE en Linux, WIA en Windows).
-        """
+        """Obtiene la lista de escáneres disponibles (SANE en Linux, WIA en Windows)."""
         scanners = []
-        import sys
+
         try:
             if sys.platform.startswith("linux"):
-                import subprocess
-                # Listar dispositivos SANE (incluyendo Wi-Fi/AirScan)
-                result = subprocess.run(["scanimage", "-f", "%d|%v %m%n"], capture_output=True, text=True)
+                result = subprocess.run(
+                    ["scanimage", "-f", "%d|%v %m%n"],
+                    capture_output=True,
+                    text=True,
+                )
                 if result.returncode == 0:
-                    lines = result.stdout.strip().split('\n')
-                    for line in lines:
-                        if '|' in line:
-                            parts = line.split('|', 1)
-                            scanners.append({"id": parts[0].strip(), "name": parts[1].strip()})
+                    for line in result.stdout.strip().split("\n"):
+                        if "|" in line:
+                            device_id, device_name = line.split("|", 1)
+                            scanners.append(
+                                {
+                                    "id": device_id.strip(),
+                                    "name": device_name.strip(),
+                                }
+                            )
+
             elif sys.platform == "win32":
                 import win32com.client
-                dev_mgr = win32com.client.Dispatch("WIA.DeviceManager")
-                for i in range(1, dev_mgr.DeviceInfos.Count + 1):
-                    info = dev_mgr.DeviceInfos(i)
-                    if info.Type == 1:  # 1 = ScannerDeviceType
-                        d_id = info.DeviceID
-                        d_name = f"Escáner {i}"
-                        for j in range(1, info.Properties.Count + 1):
-                            if info.Properties(j).Name == "Name":
-                                d_name = info.Properties(j).Value
-                                break
-                        scanners.append({"id": d_id, "name": d_name})
-        except Exception as e:
-            print(f"[SCANNER] Error listando escáneres: {e}")
-            
+
+                device_manager = win32com.client.Dispatch("WIA.DeviceManager")
+                for index in range(1, device_manager.DeviceInfos.Count + 1):
+                    info = device_manager.DeviceInfos(index)
+                    if info.Type != 1:
+                        continue
+
+                    device_name = f"Escáner {index}"
+                    for property_index in range(1, info.Properties.Count + 1):
+                        if info.Properties(property_index).Name == "Name":
+                            device_name = info.Properties(property_index).Value
+                            break
+
+                    scanners.append({"id": info.DeviceID, "name": device_name})
+        except Exception as error:
+            print(f"[SCANNER] Error listando escáneres: {error}")
+
         return scanners
 
     def scan_physical_document(self, device_id=None):
-        """
-        CP-054, CP-055, CP-056: Interoperabilidad TWAIN/WIA (y SANE en Linux).
-        Escanea físicamente un documento desde hardware conectado y lo convierte a PDF.
-        """
-        import sys
-        import subprocess
-        import uuid
+        """Captura un folio y lo cifra sin crear una imagen/PDF temporal en texto claro."""
+        self._require_session_temp_dir()
+
         from PIL import Image
 
         base_name = f"scan_{uuid.uuid4().hex[:8]}"
         scan_filename = f"{base_name}.pdf"
-        scan_path = os.path.join(TEMP_DIR, scan_filename)
-        scan_path = self._prevent_collision(scan_path)
+        scan_path = self._secure_destination(scan_filename)
 
-        def _convert_and_secure(raw_img_path):
-            pdf_raw_path = raw_img_path + ".pdf"
-            img = Image.open(raw_img_path)
-            img.convert("RGB").save(pdf_raw_path, "PDF")
-            os.remove(raw_img_path)
-            
-            SecureFileWriter.write_secure(pdf_raw_path, scan_path)
-            os.remove(pdf_raw_path)
-            print(f"[SCANNER] Escaneo exitoso convertido a PDF: {os.path.basename(scan_path)}")
+        def secure_image_bytes_as_pdf(raw_image_bytes):
+            if not raw_image_bytes:
+                raise ValueError("El escáner no devolvió contenido de imagen.")
+
+            with Image.open(BytesIO(raw_image_bytes)) as source_image:
+                rgb_image = source_image.convert("RGB")
+                pdf_buffer = BytesIO()
+                rgb_image.save(pdf_buffer, "PDF")
+
+            SecureFileWriter.write_secure_bytes(pdf_buffer.getvalue(), scan_path)
+            print(
+                "[SCANNER] Escaneo convertido en memoria y almacenado cifrado: "
+                f"{os.path.basename(scan_path)}"
+            )
             return scan_path
 
         try:
             if sys.platform.startswith("linux"):
-                print(f"[SCANNER] Iniciando escaneo nativo en Linux (Dispositivo: {device_id or 'Auto'})...")
-                raw_path = os.path.join(DATA_DIR, f"{base_name}.png")
-                
-                cmd = ["scanimage", "--format=png", "--resolution=300", f"--output-file={raw_path}"]
+                print(
+                    "[SCANNER] Iniciando escaneo nativo en Linux "
+                    f"(Dispositivo: {device_id or 'Auto'})..."
+                )
+                command = [
+                    "scanimage",
+                    "--format=png",
+                    f"--resolution={SCAN_RESOLUTION_DPI}",
+                ]
                 if device_id:
-                    cmd.extend(["-d", device_id])
-                    
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                
-                if result.returncode == 0 and os.path.exists(raw_path):
-                    return _convert_and_secure(raw_path)
+                    command.extend(["-d", device_id])
+
+                result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                if result.returncode == 0 and result.stdout:
+                    return secure_image_bytes_as_pdf(result.stdout)
+
+                first_error = result.stderr.decode("utf-8", errors="replace").strip()
+                print(f"[SCANNER] scanimage falló (intento 1): {first_error}. Reintentando...")
+                time.sleep(2)
+
+                result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                if result.returncode == 0 and result.stdout:
+                    return secure_image_bytes_as_pdf(result.stdout)
+
+                second_error = result.stderr.decode("utf-8", errors="replace").strip()
+                raise RuntimeError(f"SANE Error: {second_error or first_error}")
+
+            if sys.platform == "win32":
+                print("[SCANNER] Iniciando escaneo nativo en Windows (WIA)...")
+                import win32com.client
+
+                if device_id:
+                    device_manager = win32com.client.Dispatch("WIA.DeviceManager")
+                    target_info = None
+                    for index in range(1, device_manager.DeviceInfos.Count + 1):
+                        if device_manager.DeviceInfos(index).DeviceID == device_id:
+                            target_info = device_manager.DeviceInfos(index)
+                            break
+
+                    if not target_info:
+                        print(f"[SCANNER] No se encontró el dispositivo {device_id}")
+                        return None
+
+                    wia_device = target_info.Connect()
+                    item = wia_device.Items(1)
+                    image = item.Transfer("{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}")
                 else:
-                    # Retry once if it fails, airscan sometimes fails on first try
-                    print(f"[SCANNER] scanimage falló (intento 1): {result.stderr}. Reintentando...")
-                    import time
-                    time.sleep(2)
-                    result = subprocess.run(cmd, capture_output=True, text=True)
-                    if result.returncode == 0 and os.path.exists(raw_path):
-                        return _convert_and_secure(raw_path)
-                        
-                    print(f"[SCANNER] scanimage falló de nuevo: {result.stderr}")
-                    raise Exception(f"SANE Error: {result.stderr}")
-            elif sys.platform == "win32":
-                print(f"[SCANNER] Iniciando escaneo nativo en Windows (WIA)...")
-                try:
-                    import win32com.client
-                    
-                    if device_id:
-                        # Conectar al dispositivo específico
-                        dev_mgr = win32com.client.Dispatch("WIA.DeviceManager")
-                        target_info = None
-                        for i in range(1, dev_mgr.DeviceInfos.Count + 1):
-                            if dev_mgr.DeviceInfos(i).DeviceID == device_id:
-                                target_info = dev_mgr.DeviceInfos(i)
-                                break
-                                
-                        if not target_info:
-                            print(f"[SCANNER] No se encontró el dispositivo {device_id}")
-                            return None
-                            
-                        wia_dev = target_info.Connect()
-                        # Formato PNG
-                        item = wia_dev.Items(1)
-                        image = item.Transfer("{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}")
-                    else:
-                        # Mostrar diálogo WIA
-                        wia = win32com.client.Dispatch("WIA.CommonDialog")
-                        image = wia.ShowAcquireImage(1, 4, 1, "{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}", False, True, False)
-                        
-                    if image:
-                        raw_path = os.path.join(DATA_DIR, f"{base_name}.png")
-                        image.SaveFile(raw_path)
-                        if os.path.exists(raw_path):
-                            return _convert_and_secure(raw_path)
-                except Exception as e:
-                    print(f"[SCANNER] Windows WIA falló: {e}")
-                    return None
-            else:
-                print(f"[SCANNER] OS no soportado para escaneo nativo: {sys.platform}")
+                    common_dialog = win32com.client.Dispatch("WIA.CommonDialog")
+                    image = common_dialog.ShowAcquireImage(
+                        1,
+                        4,
+                        1,
+                        "{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}",
+                        False,
+                        True,
+                        False,
+                    )
+
+                if image:
+                    raw_image_bytes = bytes(image.FileData.BinaryData)
+                    return secure_image_bytes_as_pdf(raw_image_bytes)
                 return None
-        except Exception as e:
-            print(f"[SCANNER] Excepción durante el escaneo: {e}")
+
+            print(f"[SCANNER] OS no soportado para escaneo nativo: {sys.platform}")
             return None
-        return None
+        except Exception as error:
+            print(f"[SCANNER] Excepción durante el escaneo: {error}")
+            return None
 
     def get_temp_files(self):
-        """List all files currently in the temp workspace."""
+        """Lista los folios cifrados pertenecientes a la sesión de captura actual."""
         files = []
-        if os.path.exists(TEMP_DIR):
-            for f in sorted(os.listdir(TEMP_DIR)):
-                full_path = os.path.join(TEMP_DIR, f)
-                if os.path.isfile(full_path):
-                    ext = os.path.splitext(f)[1].lower()
-                    if ext in [".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".bmp"]:
-                        files.append({
-                            "name": f,
-                            "path": full_path,
-                            "size": os.path.getsize(full_path),
-                            "ext": ext,
-                        })
+        session_temp_dir = self._session_temp_dir
+        if not session_temp_dir or not os.path.exists(session_temp_dir):
+            return files
+
+        for file_name in sorted(os.listdir(session_temp_dir)):
+            full_path = os.path.join(session_temp_dir, file_name)
+            if not os.path.isfile(full_path):
+                continue
+
+            extension = os.path.splitext(file_name)[1].lower()
+            if extension in SUPPORTED_DOCUMENT_EXTENSIONS:
+                files.append(
+                    {
+                        "name": file_name,
+                        "path": full_path,
+                        "size": os.path.getsize(full_path),
+                        "ext": extension,
+                    }
+                )
+
         return files
 
     def clear_temp(self):
-        """Clear the temp workspace."""
-        if os.path.exists(TEMP_DIR):
-            for f in os.listdir(TEMP_DIR):
-                full = os.path.join(TEMP_DIR, f)
+        """Elimina los directorios temporales cifrados después del procesamiento del lote."""
+        if os.path.exists(TEMP_ROOT_DIR):
+            for entry_name in os.listdir(TEMP_ROOT_DIR):
+                entry_path = os.path.join(TEMP_ROOT_DIR, entry_name)
                 try:
-                    os.remove(full)
-                except OSError:
-                    pass
+                    if os.path.isdir(entry_path):
+                        shutil.rmtree(entry_path)
+                    else:
+                        os.remove(entry_path)
+                except OSError as error:
+                    print(f"[RF-04] No se pudo limpiar {entry_path}: {error}")
+
+        SecureFileWriter.deactivate_session(self._secure_session_id)
+        self._capture_storage_active = False
+        self._secure_session_id = None
+        self._session_temp_dir = None
 
     def _prevent_collision(self, path):
-        """Prevent filename collision."""
+        """Evita colisiones de nombres dentro del directorio cifrado."""
         if not os.path.exists(path):
             return path
-        base, ext = os.path.splitext(path)
-        v = 2
-        while os.path.exists(f"{base}_v{v}{ext}"):
-            v += 1
-        return f"{base}_v{v}{ext}"
+
+        base, extension = os.path.splitext(path)
+        version = 2
+        while os.path.exists(f"{base}_v{version}{extension}"):
+            version += 1
+        return f"{base}_v{version}{extension}"
 
     @property
     def watch_folder(self):
@@ -290,4 +371,4 @@ class ScannerManager:
 
     @property
     def temp_folder(self):
-        return TEMP_DIR
+        return self._session_temp_dir or TEMP_ROOT_DIR
