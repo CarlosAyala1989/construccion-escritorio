@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sqlite3
+import threading
 import uuid
 from datetime import datetime
 from urllib.parse import unquote, urlparse
@@ -17,6 +18,11 @@ import mysql.connector
 import pyotp
 
 from src.app_paths import BASE_DIR, DATA_DIR, ensure_runtime_dirs
+from src.core.local_crypto import (
+    decrypt_local_payload,
+    encrypt_local_payload,
+    is_encrypted_local_payload,
+)
 
 # Local paths
 REPO_ROOT = os.path.dirname(BASE_DIR)
@@ -137,7 +143,7 @@ class DatabaseManager:
         if self._initialized:
             return
         self._initialized = True
-        self._mysql_conn = None
+        self._mysql_connections = threading.local()
         self._init_sqlite()
 
     # ─── SQLite (Local) ────────────────────────────────
@@ -203,8 +209,40 @@ class DatabaseManager:
             )
         """)
 
+        self._encrypt_legacy_audit_logs(c)
+
         conn.commit()
         conn.close()
+
+    def _encrypt_legacy_audit_logs(self, cursor):
+        """Migrate legacy readable log rows without changing the SQLite schema."""
+        rows = cursor.execute(
+            "SELECT * FROM local_audit_log WHERE details IS NULL OR details NOT LIKE ?",
+            ("DZENC1:%",),
+        ).fetchall()
+        column_names = [column[0] for column in cursor.description]
+
+        for row in rows:
+            values = dict(zip(column_names, row))
+            encrypted_payload = encrypt_local_payload({
+                "user_id": values.get("user_id"),
+                "user_name": values.get("user_name"),
+                "action": values.get("action"),
+                "details": values.get("details"),
+                "status": values.get("status") or "SUCCESS",
+                "workspace_id": values.get("workspace_id"),
+            })
+            cursor.execute(
+                """UPDATE local_audit_log
+                   SET user_id = NULL,
+                       user_name = NULL,
+                       action = 'ENCRYPTED',
+                       details = ?,
+                       status = 'ENCRYPTED',
+                       workspace_id = NULL
+                   WHERE id = ?""",
+                (encrypted_payload, values["id"]),
+            )
 
     def get_sqlite(self):
         """Get a fresh SQLite connection."""
@@ -221,9 +259,11 @@ class DatabaseManager:
             return None
 
         try:
-            if self._mysql_conn is None or not self._mysql_conn.is_connected():
-                self._mysql_conn = mysql.connector.connect(**MYSQL_CONFIG)
-            return self._mysql_conn
+            connection = getattr(self._mysql_connections, "connection", None)
+            if connection is None or not connection.is_connected():
+                connection = mysql.connector.connect(**MYSQL_CONFIG)
+                self._mysql_connections.connection = connection
+            return connection
         except mysql.connector.Error as e:
             print(f"[DB] MySQL connection failed: {e}")
             return None
@@ -296,21 +336,64 @@ class DatabaseManager:
             # Fallback to cached
             return self._get_cached("workspaces", [])
 
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT w.id, w.name, w.cloudPath, w.defaultPassword,
-                   w.cloudFolderId, w.cloudRefreshToken
-            FROM Workspace w
-            INNER JOIN _UserWorkspaces uw ON uw.B = w.id
-            WHERE uw.A = %s
-            ORDER BY w.name ASC
-        """, (user_id,))
-        workspaces = cursor.fetchall()
-        cursor.close()
+        cursor = None
+        try:
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute("""
+                SELECT w.id, w.name, w.cloudPath, w.defaultPassword,
+                       w.cloudFolderId, w.cloudRefreshToken
+                FROM Workspace w
+                INNER JOIN _UserWorkspaces uw ON uw.B = w.id
+                WHERE uw.A = %s
+                ORDER BY w.name ASC
+            """, (user_id,))
+            workspaces = cursor.fetchall()
+        except mysql.connector.Error as error:
+            print(f"[DB] Workspace list failed; using cache: {error}")
+            return self._get_cached("workspaces", [])
+        finally:
+            if cursor:
+                cursor.close()
 
         # Cache for offline use
         self._set_cached("workspaces", json.dumps(workspaces))
         return workspaces
+
+    def get_workspace(self, workspace_id):
+        """Get one workspace from MySQL, falling back to the last safe cache."""
+        if not workspace_id:
+            return None
+
+        conn = self.get_mysql()
+        if conn:
+            cursor = None
+            try:
+                cursor = conn.cursor(dictionary=True)
+                cursor.execute(
+                    """SELECT id, name, cloudPath, defaultPassword,
+                              cloudFolderId, cloudRefreshToken
+                       FROM Workspace
+                       WHERE id = %s""",
+                    (workspace_id,),
+                )
+                workspace = cursor.fetchone()
+                if workspace:
+                    return workspace
+            except mysql.connector.Error as error:
+                print(f"[DB] Workspace lookup failed; using cache: {error}")
+            finally:
+                if cursor:
+                    cursor.close()
+
+        cached_workspaces = self._get_cached("workspaces", [])
+        return next(
+            (
+                workspace
+                for workspace in cached_workspaces
+                if workspace.get("id") == workspace_id
+            ),
+            None,
+        )
 
     # ─── Security Policies ─────────────────────────────
 
@@ -320,14 +403,21 @@ class DatabaseManager:
         if not conn:
             return self._get_cached("policies", [])
 
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT id, type, target, password, priority, workspaceId
-            FROM SecurityPolicy
-            ORDER BY priority DESC
-        """)
-        policies = cursor.fetchall()
-        cursor.close()
+        cursor = None
+        try:
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute("""
+                SELECT id, type, target, password, priority, workspaceId
+                FROM SecurityPolicy
+                ORDER BY priority DESC
+            """)
+            policies = cursor.fetchall()
+        except mysql.connector.Error as error:
+            print(f"[DB] Policy lookup failed; using cache: {error}")
+            return self._get_cached("policies", [])
+        finally:
+            if cursor:
+                cursor.close()
 
         self._set_cached("policies", json.dumps(policies))
         return policies
@@ -345,10 +435,22 @@ class DatabaseManager:
                 "cloudProvider": "MANUAL",
             })
 
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM Config LIMIT 1")
-        config = cursor.fetchone()
-        cursor.close()
+        cursor = None
+        try:
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute("SELECT * FROM Config LIMIT 1")
+            config = cursor.fetchone()
+        except mysql.connector.Error as error:
+            print(f"[DB] Config lookup failed; using cache: {error}")
+            return self._get_cached("config", {
+                "compressionEnabled": False,
+                "compressionThresholdMb": 10,
+                "deleteLocalAfterUpload": False,
+                "cloudProvider": "MANUAL",
+            })
+        finally:
+            if cursor:
+                cursor.close()
 
         if config:
             # Convert booleans
@@ -387,10 +489,17 @@ class DatabaseManager:
         if not conn:
             return self._get_cached("nomenclatures", [])
 
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM NomenclatureField ORDER BY fieldOrder ASC")
-        fields = cursor.fetchall()
-        cursor.close()
+        cursor = None
+        try:
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute("SELECT * FROM NomenclatureField ORDER BY fieldOrder ASC")
+            fields = cursor.fetchall()
+        except mysql.connector.Error as error:
+            print(f"[DB] Nomenclature lookup failed; using cache: {error}")
+            return self._get_cached("nomenclatures", [])
+        finally:
+            if cursor:
+                cursor.close()
 
         self._set_cached("nomenclatures", json.dumps(fields, default=str))
         return fields
@@ -398,15 +507,25 @@ class DatabaseManager:
     # ─── Audit Logs ────────────────────────────────────
 
     def create_audit_log(self, user_id, user_name, action, details, status="SUCCESS", workspace_id=None):
-        """Create audit log — tries MySQL first, falls back to local SQLite."""
+        """Create an AES-GCM encrypted local log, then try the SaaS database."""
         log_id = str(uuid.uuid4())
 
-        # Always save locally first
+        encrypted_payload = encrypt_local_payload({
+            "user_id": user_id,
+            "user_name": user_name,
+            "action": action,
+            "details": details,
+            "status": status,
+            "workspace_id": workspace_id,
+        })
+
+        # Persist only the encrypted envelope locally. Searchable metadata is
+        # reconstructed in memory immediately before synchronization.
         sqlite_conn = self.get_sqlite()
         sqlite_conn.execute(
             """INSERT INTO local_audit_log (id, user_id, user_name, action, details, status, workspace_id, synced)
                VALUES (?, ?, ?, ?, ?, ?, ?, 0)""",
-            (log_id, user_id, user_name, action, details, status, workspace_id)
+            (log_id, None, None, "ENCRYPTED", encrypted_payload, "ENCRYPTED", None)
         )
         sqlite_conn.commit()
         sqlite_conn.close()
@@ -447,13 +566,14 @@ class DatabaseManager:
         synced_count = 0
         for log in pending:
             try:
+                log_data = self._read_audit_log_payload(log)
                 cursor = conn.cursor()
                 cursor.execute(
                     """INSERT INTO AuditLog (id, userId, userName, action, details, status, workspaceId, createdAt)
                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                        ON DUPLICATE KEY UPDATE id = id""",
-                    (log["id"], log["user_id"], log["user_name"], log["action"],
-                     log["details"], log["status"], log["workspace_id"], log["created_at"])
+                    (log["id"], log_data["user_id"], log_data["user_name"], log_data["action"],
+                     log_data["details"], log_data["status"], log_data["workspace_id"], log["created_at"])
                 )
                 conn.commit()
                 cursor.close()
@@ -466,6 +586,32 @@ class DatabaseManager:
         sqlite_conn.commit()
         sqlite_conn.close()
         return synced_count
+
+    @staticmethod
+    def _read_audit_log_payload(log):
+        """Read encrypted rows while retaining compatibility with legacy queues."""
+        if is_encrypted_local_payload(log["details"]):
+            payload = decrypt_local_payload(log["details"])
+            required_fields = {
+                "user_id",
+                "user_name",
+                "action",
+                "details",
+                "status",
+                "workspace_id",
+            }
+            if not isinstance(payload, dict) or not required_fields.issubset(payload):
+                raise ValueError("Bitácora cifrada incompleta.")
+            return payload
+
+        return {
+            "user_id": log["user_id"],
+            "user_name": log["user_name"],
+            "action": log["action"],
+            "details": log["details"],
+            "status": log["status"],
+            "workspace_id": log["workspace_id"],
+        }
 
     # ─── Local Queue ───────────────────────────────────
 
@@ -484,6 +630,21 @@ class DatabaseManager:
 
     def update_queue_item(self, doc_id, **kwargs):
         """Update a queue item with any fields."""
+        allowed_fields = {
+            "file_path",
+            "original_name",
+            "workspace_id",
+            "workspace_name",
+            "status",
+            "encryption_type",
+            "encryption_password",
+            "policy_id",
+            "error_message",
+        }
+        invalid_fields = set(kwargs) - allowed_fields
+        if invalid_fields:
+            raise ValueError(f"Campos de cola no válidos: {', '.join(sorted(invalid_fields))}")
+
         conn = self.get_sqlite()
         sets = []
         values = []
@@ -496,6 +657,16 @@ class DatabaseManager:
         conn.execute(f"UPDATE local_queue SET {', '.join(sets)} WHERE id = ?", values)
         conn.commit()
         conn.close()
+
+    def get_queue_item(self, doc_id):
+        """Get a single queue item by its stable identifier."""
+        conn = self.get_sqlite()
+        item = conn.execute(
+            "SELECT * FROM local_queue WHERE id = ?",
+            (doc_id,),
+        ).fetchone()
+        conn.close()
+        return dict(item) if item else None
 
     def get_queue_items(self, status=None):
         """Get queue items, optionally filtered by status."""

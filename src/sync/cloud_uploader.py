@@ -102,7 +102,6 @@ class CloudUploader:
                 folder_parts,
                 access_token,
             )
-
             # Metadata part
             metadata = {
                 "name": filename,
@@ -117,8 +116,9 @@ class CloudUploader:
                 result = self._resumable_upload(file_path, metadata, access_token)
 
             if result.get("id"):
-                print(f"[UPLOAD] ✅ Subido a Google Drive: {filename} (ID: {result['id']})")
-                drive_path = "/".join(folder_parts + [filename])
+                stored_filename = result.get("name") or filename
+                print(f"[UPLOAD] ✅ Subido a Google Drive: {stored_filename} (ID: {result['id']})")
+                drive_path = "/".join(folder_parts + [stored_filename])
                 return {
                     "success": True,
                     "destination": f"Google Drive: {drive_path}",
@@ -210,6 +210,56 @@ class CloudUploader:
     def _escape_drive_query_value(value):
         return str(value).replace("\\", "\\\\").replace("'", "\\'")
 
+    def _resolve_gdrive_collision_name(self, parent_id, filename, access_token):
+        """Return filename or the first available _vN variant in Drive."""
+        escaped_parent = self._escape_drive_query_value(parent_id)
+        page_token = None
+        existing_names = set()
+
+        while True:
+            params = {
+                "q": f"'{escaped_parent}' in parents and trashed = false",
+                "fields": "nextPageToken,files(name)",
+                "pageSize": 1000,
+                "supportsAllDrives": "true",
+                "includeItemsFromAllDrives": "true",
+            }
+            if page_token:
+                params["pageToken"] = page_token
+
+            response = http_requests.get(
+                GOOGLE_FILES_URL,
+                headers={"Authorization": f"Bearer {access_token}"},
+                params=params,
+                timeout=30,
+            )
+            if response.status_code != 200:
+                raise RuntimeError(
+                    "No se pudo verificar colisiones de nombre en Google Drive: "
+                    f"{response.text}"
+                )
+
+            payload = response.json()
+            existing_names.update(
+                item.get("name")
+                for item in payload.get("files", [])
+                if item.get("name")
+            )
+            page_token = payload.get("nextPageToken")
+            if not page_token:
+                break
+
+        if filename not in existing_names:
+            return filename
+
+        base, extension = os.path.splitext(filename)
+        version = 2
+        candidate = f"{base}_v{version}{extension}"
+        while candidate in existing_names:
+            version += 1
+            candidate = f"{base}_v{version}{extension}"
+        return candidate
+
     def _refresh_access_token(self, refresh_token, client_id, client_secret):
         """Exchange a refresh token for a new access token."""
         try:
@@ -236,6 +286,12 @@ class CloudUploader:
 
         boundary = "gobernanza_boundary_upload"
         filename = os.path.basename(file_path)
+        metadata = dict(metadata)
+        metadata["name"] = self._resolve_gdrive_collision_name(
+            metadata["parents"][0],
+            metadata["name"],
+            access_token,
+        )
 
         # Determine MIME type
         ext = os.path.splitext(filename)[1].lower()
@@ -281,6 +337,12 @@ class CloudUploader:
     def _resumable_upload(self, file_path, metadata, access_token):
         """Resumable upload for large files (>5MB)."""
         filename = os.path.basename(file_path)
+        metadata = dict(metadata)
+        metadata["name"] = self._resolve_gdrive_collision_name(
+            metadata["parents"][0],
+            metadata["name"],
+            access_token,
+        )
         ext = os.path.splitext(filename)[1].lower()
         mime_map = {
             ".pdf": "application/pdf",

@@ -787,6 +787,17 @@
                         </div>
                     </div>
 
+                    <div id="capturePausedAlert" class="alert alert-error hidden" role="alert">
+                        <div style="flex:1;">
+                            <strong>Captura pausada.</strong>
+                            <span id="capturePauseReason">Revisa el escáner antes de continuar.</span>
+                            Los folios ya capturados permanecen cifrados y en cola.
+                        </div>
+                        <button id="btnResumeCapture" class="btn btn-sm btn-primary" onclick="handleResumeCapture()">
+                            Reanudar captura
+                        </button>
+                    </div>
+
                     <!-- Tabs -->
                     <div class="tabs">
                         <div class="tab active" onclick="switchTab('files')">Archivos en Sesión</div>

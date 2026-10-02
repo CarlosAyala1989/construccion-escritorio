@@ -1,17 +1,21 @@
 """Escritura cifrada de folios temporales para RF-04.
 
-Cada sesión de captura registra una clave AES-256 independiente en memoria. Los
-archivos incluyen el identificador de la sesión en una cabecera autenticada por
-AES-GCM, de modo que pueden seguir leyéndose durante la misma ejecución aunque
-se inicie una sesión posterior. Las claves nunca se escriben en disco.
+Cada sesión de captura deriva una clave AES-256 independiente desde la clave
+protegida del dispositivo. Los archivos incluyen el identificador de la sesión
+en una cabecera autenticada por AES-GCM, de modo que los pendientes sobreviven
+a pausas y reinicios sin almacenar la clave de sesión junto al documento.
 """
 
 import os
 import tempfile
+import hmac
+import hashlib
 from typing import Dict, Optional, Tuple
 
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
+
+from src.core.local_crypto import get_local_encryption_key
 
 
 AES_KEY_BYTES = 32
@@ -39,8 +43,8 @@ class SecureFileWriter:
 
     El estado criptográfico compartido permanece encapsulado en esta clase
     porque el scanner escribe los folios y el pipeline posterior los lee. Las
-    claves se conservan únicamente en memoria durante la ejecución para poder
-    procesar documentos pendientes de una sesión anterior sin persistir secretos.
+    claves derivadas se conservan en memoria durante la ejecución; pueden
+    reconstruirse después de un reinicio desde el secreto local del dispositivo.
     """
 
     _active_session_id: Optional[str] = None
@@ -54,7 +58,9 @@ class SecureFileWriter:
             raise SecureSessionError("La sesión cifrada requiere un identificador válido.")
 
         if normalized_session_id not in cls._session_keys:
-            cls._session_keys[normalized_session_id] = get_random_bytes(AES_KEY_BYTES)
+            cls._session_keys[normalized_session_id] = cls._derive_session_key(
+                normalized_session_id
+            )
 
         cls._active_session_id = normalized_session_id
         return normalized_session_id
@@ -166,9 +172,10 @@ class SecureFileWriter:
 
         session_key = cls._session_keys.get(session_id)
         if session_key is None:
-            raise SecureSessionError(
-                "La clave de la sesión que originó el folio ya no está disponible."
-            )
+            # Las sesiones se derivan de la clave protegida del dispositivo para
+            # que una corrección pendiente sobreviva al reinicio de la aplicación.
+            session_key = cls._derive_session_key(session_id)
+            cls._session_keys[session_id] = session_key
 
         cipher = AES.new(session_key, AES.MODE_GCM, nonce=nonce)
         return cipher.decrypt_and_verify(ciphertext, authentication_tag)
@@ -186,3 +193,11 @@ class SecureFileWriter:
             raise SecureSessionError("La clave AES-256 de la sesión no está disponible.")
 
         return session_id, session_key
+
+    @staticmethod
+    def _derive_session_key(session_id: str) -> bytes:
+        return hmac.new(
+            get_local_encryption_key(),
+            f"docuzen-capture:{session_id}".encode("utf-8"),
+            hashlib.sha256,
+        ).digest()

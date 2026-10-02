@@ -8,6 +8,7 @@ let selectedWorkspaceId = null;
 let selectedWorkspaceName = null;
 let sessionActive = false;
 let refreshInterval = null;
+let capturePaused = false;
 
 // ─── Init ─────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -31,6 +32,7 @@ async function checkStatus() {
             badge.textContent = 'Sin conexión (Offline)';
             badge.className = 'status-badge status-offline';
         }
+        updateCapturePauseState(status.capture_paused, status.pause_reason);
     } catch (e) {
         console.error('Status check failed:', e);
     }
@@ -73,9 +75,14 @@ async function handleLogout() {
     }
 
     try {
-        await eel.logout()();
+        const result = await eel.logout()();
+        if (!result.success) {
+            alert(result.error || 'No se pudo cerrar sesión.');
+            return;
+        }
     } catch (e) {
         console.error('Logout error:', e);
+        return;
     }
 
     sessionActive = false;
@@ -183,6 +190,13 @@ async function handleEndSession() {
 
     const result = await eel.end_session()();
 
+    if (!result.success) {
+        document.getElementById('panelProgress').classList.add('hidden');
+        document.getElementById('panelSession').classList.remove('hidden');
+        alert(result.error || 'No se pudo cerrar la sesión.');
+        return;
+    }
+
     // Show results
     document.getElementById('panelProgress').classList.add('hidden');
     document.getElementById('panelResults').classList.remove('hidden');
@@ -281,6 +295,7 @@ async function executeScan() {
         if (result.success) {
             refreshSessionFiles();
         } else {
+            updateCapturePauseState(result.paused, result.pause_reason || result.error);
             alert(`Error al escanear: ${result.error}`);
         }
     } catch (e) {
@@ -288,10 +303,41 @@ async function executeScan() {
         console.error('Scan error:', e);
     } finally {
         if (btn) {
-            btn.disabled = false;
+            btn.disabled = capturePaused;
             btn.textContent = '🖨 Escanear Físico';
         }
     }
+}
+
+async function handleResumeCapture() {
+    const button = document.getElementById('btnResumeCapture');
+    if (button) button.disabled = true;
+
+    try {
+        const result = await eel.resume_capture()();
+        updateCapturePauseState(result.paused, result.reason || result.error);
+        if (!result.success) {
+            alert(result.error || 'No se pudo reanudar la captura.');
+        } else if (result.processed > 0) {
+            await refreshSessionFiles();
+        }
+    } catch (error) {
+        alert('No se pudo reanudar la captura.');
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+
+function updateCapturePauseState(paused, reason) {
+    const alert = document.getElementById('capturePausedAlert');
+    const reasonElement = document.getElementById('capturePauseReason');
+    const scanButton = document.getElementById('btnScanDoc');
+    if (!alert || !reasonElement) return;
+
+    capturePaused = Boolean(paused);
+    alert.classList.toggle('hidden', !capturePaused);
+    reasonElement.textContent = reason || 'Revisa el escáner antes de continuar.';
+    if (scanButton) scanButton.disabled = capturePaused;
 }
 
 async function handleExportFiles() {
@@ -333,6 +379,8 @@ function switchTab(tabName) {
 // ─── Refresh Functions ────────────────────────────────
 async function refreshSessionFiles() {
     try {
+        const status = await eel.get_app_status()();
+        updateCapturePauseState(status.capture_paused, status.pause_reason);
         const files = await eel.get_session_files()();
         const tbody = document.getElementById('filesTableBody');
 
@@ -392,7 +440,7 @@ async function refreshQueue() {
             'PENDING': ['Pendiente', 'badge-yellow'],
             'PENDING_REVIEW': ['Revisión', 'badge-red'],
             'PROCESSING': ['Procesando', 'badge-blue'],
-            'PROCESSED': ['Procesado', 'badge-green'],
+            'PROCESSED': ['Pendiente de envío', 'badge-yellow'],
             'UPLOADED': ['Subido', 'badge-green'],
             'ERROR': ['Error', 'badge-red'],
         };

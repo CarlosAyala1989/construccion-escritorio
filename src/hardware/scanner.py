@@ -57,6 +57,9 @@ class ScannerManager:
         self._capture_storage_active = False
         self._secure_session_id = None
         self._session_temp_dir = None
+        self.is_paused = False
+        self.pause_reason = None
+        self.memory_queue = []
         self.on_file_callback = on_file_callback
 
     def start_watching(self):
@@ -65,6 +68,10 @@ class ScannerManager:
             return True
 
         self._begin_secure_capture_storage()
+        self.is_paused = False
+        self.pause_reason = None
+        self.memory_queue = []
+        self._ingest_existing_watch_files()
 
         if not HAS_WATCHDOG:
             print("[SCANNER] watchdog no disponible; monitoreo de carpeta deshabilitado")
@@ -80,6 +87,17 @@ class ScannerManager:
         print(f"[RF-04] Directorio temporal cifrado: {self._session_temp_dir}")
         return True
 
+    def _ingest_existing_watch_files(self):
+        """Recover supported files left in the watch folder by a prior interruption."""
+        for file_name in sorted(os.listdir(WATCH_DIR)):
+            file_path = os.path.join(WATCH_DIR, file_name)
+            if not os.path.isfile(file_path):
+                continue
+            if os.path.splitext(file_name)[1].lower() not in SUPPORTED_DOCUMENT_EXTENSIONS:
+                continue
+            if not self._process_file_internal(file_path, remove_source=True):
+                break
+
     def stop_watching(self):
         """Detiene la captura; conserva los folios cifrados para el procesamiento posterior."""
         if self._observer and self._running:
@@ -92,6 +110,61 @@ class ScannerManager:
         if self._capture_storage_active:
             SecureFileWriter.deactivate_session(self._secure_session_id)
             self._capture_storage_active = False
+
+    def pause_capture(self, reason=None):
+        """Pause ingestion without deleting encrypted folios already captured."""
+        self.is_paused = True
+        self.pause_reason = str(reason or "Atasco o fallo mecánico del escáner.")
+        print(f"[RF-05] Captura pausada: {self.pause_reason}")
+        return {
+            "paused": True,
+            "reason": self.pause_reason,
+            "queued": len(self.memory_queue),
+        }
+
+    def resume_capture(self):
+        """Resume ingestion and safely process files observed while paused."""
+        if not self._capture_storage_active:
+            raise RuntimeError("No existe una sesión de captura activa para reanudar.")
+
+        queued_paths = list(self.memory_queue)
+        self.memory_queue = []
+        self.is_paused = False
+        self.pause_reason = None
+
+        processed = 0
+        for index, file_path in enumerate(queued_paths):
+            if not os.path.exists(file_path):
+                continue
+            try:
+                try:
+                    remove_source = os.path.commonpath(
+                        [os.path.abspath(WATCH_DIR), os.path.abspath(file_path)]
+                    ) == os.path.abspath(WATCH_DIR)
+                except ValueError:
+                    remove_source = False
+                encrypted_path = self._process_file_internal(
+                    file_path,
+                    remove_source=remove_source,
+                )
+                if not encrypted_path:
+                    self.memory_queue.extend(queued_paths[index + 1:])
+                    break
+                processed += 1
+            except Exception as error:
+                self.pause_capture(error)
+                if file_path not in self.memory_queue:
+                    self.memory_queue.append(file_path)
+                self.memory_queue.extend(queued_paths[index + 1:])
+                break
+
+        print(f"[RF-05] Captura reanudada. Archivos recuperados: {processed}")
+        return {
+            "paused": self.is_paused,
+            "processed": processed,
+            "queued": len(self.memory_queue),
+            "reason": self.pause_reason,
+        }
 
     def _begin_secure_capture_storage(self):
         """Crea un directorio aislado y activa una clave AES-256 para la sesión de captura."""
@@ -140,17 +213,27 @@ class ScannerManager:
             print(f"[SCANNER] En memoria (pausado): {os.path.basename(file_path)}")
             return
 
-        self._process_file_internal(file_path)
+        self._process_file_internal(file_path, remove_source=True)
 
-    def _process_file_internal(self, file_path):
+    def _process_file_internal(self, file_path, remove_source=False):
         print(f"[SCANNER] New file detected: {os.path.basename(file_path)}")
 
         try:
             encrypted_path = self._secure_source_file(file_path)
+            if remove_source:
+                try:
+                    os.remove(file_path)
+                except OSError as error:
+                    print(f"[RF-04] No se pudo retirar el original de la carpeta vigilada: {error}")
             if self.on_file_callback:
                 self.on_file_callback(encrypted_path)
+            return encrypted_path
         except Exception as error:
             print(f"[SCANNER] Failed to encrypt captured file: {error}")
+            self.pause_capture(error)
+            if file_path not in self.memory_queue:
+                self.memory_queue.append(file_path)
+            return None
 
     def import_files(self, file_paths):
         """Importa archivos existentes y retorna únicamente las rutas cifradas de la sesión."""
@@ -217,6 +300,10 @@ class ScannerManager:
     def scan_physical_document(self, device_id=None):
         """Captura un folio y lo cifra sin crear una imagen/PDF temporal en texto claro."""
         self._require_session_temp_dir()
+        if self.is_paused:
+            raise RuntimeError(
+                "La captura está pausada. Resuelve el atasco o fallo y reanuda la sesión."
+            )
 
         from PIL import Image
 
@@ -309,6 +396,7 @@ class ScannerManager:
             return None
         except Exception as error:
             print(f"[SCANNER] Excepción durante el escaneo: {error}")
+            self.pause_capture(error)
             return None
 
     def get_temp_files(self):
@@ -353,6 +441,9 @@ class ScannerManager:
         self._capture_storage_active = False
         self._secure_session_id = None
         self._session_temp_dir = None
+        self.is_paused = False
+        self.pause_reason = None
+        self.memory_queue = []
 
     def _prevent_collision(self, path):
         """Evita colisiones de nombres dentro del directorio cifrado."""
