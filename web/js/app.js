@@ -3,24 +3,24 @@
  * Manejo del DOM, navegación entre pantallas, y comunicación con Python vía Eel.
  */
 
-// ─── State ────────────────────────────────────────────
+// ─── Estado ───────────────────────────────────────────
 let selectedWorkspaceId = null;
 let selectedWorkspaceName = null;
 let sessionActive = false;
 let refreshInterval = null;
 let capturePaused = false;
 
-// ─── Init ─────────────────────────────────────────────
+// ─── Inicialización ───────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
     await checkStatus();
-    // Check if already logged in
+    // Comprueba si ya hay una sesión iniciada.
     const user = await eel.get_current_user()();
     if (user) {
         showDashboard(user);
     }
 });
 
-// ─── Status Check ─────────────────────────────────────
+// ─── Consulta de estado ───────────────────────────────
 async function checkStatus() {
     try {
         const status = await eel.get_app_status()();
@@ -38,7 +38,7 @@ async function checkStatus() {
     }
 }
 
-// ─── Login ────────────────────────────────────────────
+// ─── Inicio de sesión ─────────────────────────────────
 async function handleLogin(e) {
     e.preventDefault();
     const email = document.getElementById('loginEmail').value;
@@ -68,7 +68,7 @@ async function handleLogin(e) {
     btn.disabled = false;
 }
 
-// ─── Logout ───────────────────────────────────────────
+// ─── Cierre de sesión ─────────────────────────────────
 async function handleLogout() {
     if (sessionActive) {
         if (!confirm('Tienes una sesión activa. ¿Deseas cerrar sesión de todas formas?')) return;
@@ -90,7 +90,7 @@ async function handleLogout() {
     selectedWorkspaceName = null;
     if (refreshInterval) clearInterval(refreshInterval);
 
-    // Reset ALL screens
+    // Restablece todas las pantallas.
     document.getElementById('screenDashboard').classList.add('hidden');
     document.getElementById('panelSession').classList.add('hidden');
     document.getElementById('panelProgress').classList.add('hidden');
@@ -100,13 +100,13 @@ async function handleLogout() {
     document.getElementById('userDisplay').classList.add('hidden');
     document.getElementById('btnLogout').classList.add('hidden');
 
-    // Clear form fields
+    // Limpia los campos del formulario.
     document.getElementById('loginEmail').value = '';
     document.getElementById('loginPassword').value = '';
     document.getElementById('loginTotpCode').value = '';
 }
 
-// ─── Show Dashboard ───────────────────────────────────
+// ─── Muestra el panel principal ───────────────────────
 async function showDashboard(user) {
     document.getElementById('screenLogin').classList.add('hidden');
     document.getElementById('screenDashboard').classList.remove('hidden');
@@ -118,7 +118,7 @@ async function showDashboard(user) {
     await checkStatus();
 }
 
-// ─── Workspaces ───────────────────────────────────────
+// ─── Espacios de trabajo ──────────────────────────────
 async function loadWorkspaces() {
     const workspaces = await eel.get_workspaces()();
     const grid = document.getElementById('workspaceGrid');
@@ -136,7 +136,7 @@ async function loadWorkspaces() {
         </div>
     `).join('');
 
-    // Add start button if workspace selected
+    // Añade el botón de inicio si hay un espacio seleccionado.
     if (selectedWorkspaceId) {
         const existing = document.getElementById('btnStartSession');
         if (!existing) {
@@ -150,6 +150,7 @@ async function loadWorkspaces() {
     }
 }
 
+// RF-03
 async function selectWorkspace(id, name) {
     const result = await eel.select_workspace(id, name)();
     if (result.success) {
@@ -159,7 +160,8 @@ async function selectWorkspace(id, name) {
     }
 }
 
-// ─── Session ──────────────────────────────────────────
+// ─── Sesión ───────────────────────────────────────────
+// RF-03
 async function handleStartSession() {
     if (!selectedWorkspaceId) {
         alert('Selecciona un espacio de trabajo primero.');
@@ -174,7 +176,7 @@ async function handleStartSession() {
         document.getElementById('sessionWorkspaceName').textContent = selectedWorkspaceName;
         document.getElementById('watchFolderPath').textContent = result.watch_folder;
 
-        // Start periodic refresh
+        // Inicia la actualización periódica.
         refreshInterval = setInterval(refreshSessionFiles, 3000);
     } else {
         alert(result.error);
@@ -184,7 +186,7 @@ async function handleStartSession() {
 async function handleEndSession() {
     if (!confirm('¿Cerrar la sesión? Se procesarán y subirán todos los documentos pendientes.')) return;
 
-    // Show progress panel
+    // Muestra el panel de progreso.
     document.getElementById('panelSession').classList.add('hidden');
     document.getElementById('panelProgress').classList.remove('hidden');
 
@@ -197,7 +199,7 @@ async function handleEndSession() {
         return;
     }
 
-    // Show results
+    // Muestra los resultados.
     document.getElementById('panelProgress').classList.add('hidden');
     document.getElementById('panelResults').classList.remove('hidden');
 
@@ -224,7 +226,7 @@ async function handleEndSession() {
     if (refreshInterval) clearInterval(refreshInterval);
 }
 
-// ─── File Import ──────────────────────────────────────
+// ─── Importación de archivos ──────────────────────────
 async function handleImportFiles() {
     try {
         const result = await eel.pick_and_import_files()();
@@ -233,7 +235,7 @@ async function handleImportFiles() {
                 alert(`✅ ${result.count} archivo(s) importado(s) correctamente.`);
                 refreshSessionFiles();
             } else {
-                // User cancelled the dialog
+                // El usuario canceló el cuadro de diálogo.
             }
         } else {
             alert(`Error: ${result.error}`);
@@ -244,7 +246,7 @@ async function handleImportFiles() {
     }
 }
 
-// ─── File Export / Scanner ────────────────────────────
+// ─── Exportación de archivos / escáner ────────────────
 
 async function openScannerModal() {
     if (!sessionActive) {
@@ -261,7 +263,7 @@ async function openScannerModal() {
         const scanners = await eel.get_scanners()();
         if (scanners && scanners.length > 0) {
             select.innerHTML = scanners.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
-            // En Windows, opcionalmente permitimos dejar el select vacío para que WIA muestre su propio popup si el user prefiere
+            // En Windows, se puede dejar vacío el selector para que WIA muestre su propio cuadro si el usuario lo prefiere.
             select.innerHTML += '<option value="">Selección del sistema (por defecto)</option>';
             document.getElementById('btnConfirmScan').disabled = false;
         } else {
@@ -281,7 +283,7 @@ function closeScannerModal() {
 async function executeScan() {
     closeScannerModal();
     
-    // Disable UI during scan
+    // Deshabilita la interfaz durante el escaneo.
     const btn = document.getElementById('btnScanDoc');
     if (btn) {
         btn.disabled = true;
@@ -309,6 +311,7 @@ async function executeScan() {
     }
 }
 
+// RF-05
 async function handleResumeCapture() {
     const button = document.getElementById('btnResumeCapture');
     if (button) button.disabled = true;
@@ -328,6 +331,7 @@ async function handleResumeCapture() {
     }
 }
 
+// RF-05
 function updateCapturePauseState(paused, reason) {
     const alert = document.getElementById('capturePausedAlert');
     const reasonElement = document.getElementById('capturePauseReason');
@@ -347,7 +351,7 @@ async function handleExportFiles() {
             if (result.count > 0) {
                 alert(`✅ ${result.count} archivo(s) exportado(s) a:\n${result.destination}`);
             } else {
-                // User cancelled or no files
+                // El usuario canceló o no hay archivos.
             }
         } else {
             alert(`Error: ${result.error}`);
@@ -358,25 +362,25 @@ async function handleExportFiles() {
     }
 }
 
-// ─── Tab Navigation ───────────────────────────────────
+// ─── Navegación por pestañas ──────────────────────────
 function switchTab(tabName) {
-    // Update tab buttons
+    // Actualiza los botones de las pestañas.
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     event.target.classList.add('active');
 
-    // Show/hide tab content
+    // Muestra u oculta el contenido de las pestañas.
     document.getElementById('tabFiles').classList.add('hidden');
     document.getElementById('tabReview').classList.add('hidden');
     document.getElementById('tabQueue').classList.add('hidden');
     document.getElementById('tab' + tabName.charAt(0).toUpperCase() + tabName.slice(1)).classList.remove('hidden');
 
-    // Refresh data
+    // Actualiza los datos.
     if (tabName === 'files') refreshSessionFiles();
     if (tabName === 'review') refreshPendingReview();
     if (tabName === 'queue') refreshQueue();
 }
 
-// ─── Refresh Functions ────────────────────────────────
+// ─── Funciones de actualización ───────────────────────
 async function refreshSessionFiles() {
     try {
         const status = await eel.get_app_status()();
@@ -398,9 +402,10 @@ async function refreshSessionFiles() {
         `).join('');
 
         updateDocCount(files.length);
-    } catch (e) { /* ignore refresh errors */ }
+    } catch (e) { /* Ignora los errores de actualización. */ }
 }
 
+// RF-08
 async function refreshPendingReview() {
     try {
         const items = await eel.get_pending_review()();
@@ -423,7 +428,7 @@ async function refreshPendingReview() {
                 </td>
             </tr>
         `).join('');
-    } catch (e) { /* ignore */ }
+    } catch (e) { /* Ignora el error de actualización. */ }
 }
 
 async function refreshQueue() {
@@ -456,10 +461,10 @@ async function refreshQueue() {
                 </tr>
             `;
         }).join('');
-    } catch (e) { /* ignore */ }
+    } catch (e) { /* Ignora el error de actualización. */ }
 }
 
-// ─── Helpers ──────────────────────────────────────────
+// ─── Funciones auxiliares ─────────────────────────────
 function updateDocCount(count) {
     const el = document.getElementById('sessionDocCount');
     if (el) {
@@ -476,6 +481,7 @@ function formatSize(bytes) {
     return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
 }
 
+// RF-08
 function openCorrection(id, name, error) {
     window.open(`correction.html?id=${id}&name=${encodeURIComponent(name)}&error=${encodeURIComponent(error)}`, '_blank', 'width=650,height=450');
 }

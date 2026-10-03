@@ -1,1 +1,1 @@
-# sync package
+# Paquete de sincronización.

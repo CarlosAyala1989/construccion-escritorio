@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import shutil
@@ -17,81 +18,107 @@ try:
 except ImportError:
     HAS_PYPDF2 = False
 
-TESSERACT_CMD = shutil.which("tesseract")
-PDFTOPPM_CMD = shutil.which("pdftoppm")
-OCR_LANG = os.getenv("OCR_LANG", "spa+eng")
+PDF_RENDER_DPI = 200
+FIRST_PDF_PAGE = 1
+MAX_EXTRACTED_FIELD_LENGTH = 50
+GRAYSCALE_LEVELS = 256
+GRAYSCALE_MAX_VALUE = GRAYSCALE_LEVELS - 1
+WATERMARK_BACKGROUND_MIN = 220
+WATERMARK_BACKGROUND_OFFSET = 80
+WATERMARK_FOREGROUND_OFFSET = 8
+WATERMARK_MIN_FOREGROUND = 128
+WATERMARK_RED_DOMINANCE_THRESHOLD = 25
+MIN_WATERMARK_PIXELS = 500
+WATERMARK_ROTATION_ANGLES = (-45, 45)
+WATERMARK_CROP_BORDER = 40
+WATERMARK_OCR_PAGE_SEGMENTATION_MODE = 7
+MIN_WATERMARK_WORD_LENGTH = 4
+WATERMARK_MORPHOLOGY_KERNEL_SIZE = 5
 
 
 class OCREngine:
-    """Engine for text extraction from PDFs and images."""
+    """Motor para extraer texto de PDFs e imágenes."""
 
+    # RF-06 — Configura las herramientas OCR por instancia, sin estado mutable global.
     def __init__(self):
         self.last_text = ""
+        self.tesseract_cmd = shutil.which("tesseract")
+        self.pdftoppm_cmd = shutil.which("pdftoppm")
+        self.language = os.getenv("OCR_LANG", "spa+eng")
 
+    # RF-06 — Acumula texto por página y conserva el OCR visual suplementario.
     def extract_text_from_pdf(self, pdf_path):
-        """Extract embedded text and supplement hybrid PDFs with visual OCR."""
-        text = ""
+        """Extrae texto incrustado y complementa PDFs híbridos con OCR visual."""
+        page_texts = []
+        if not pdf_path or not os.path.isfile(pdf_path):
+            self.last_text = ""
+            return ""
 
-        # Try PyPDF2 first (fast, for digital PDFs)
         if HAS_PYPDF2:
             try:
                 reader = PdfReader(pdf_path)
                 for page in reader.pages:
                     page_text = page.extract_text()
                     if page_text:
-                        text += page_text + "\n"
-            except Exception as e:
-                print(f"[OCR] PyPDF2 failed: {e}")
+                        page_texts.append(page_text)
+            except Exception:
+                logging.getLogger(__name__).exception("Falló la extracción de texto incrustado del PDF.")
 
         try:
+            text = "\n".join(page_texts)
             if text.strip():
-                # A hybrid PDF can contain selectable body text plus an image-only
-                # security label. OCR the first page as a visual supplement so a
-                # label such as "RESERVADO" participates in semantic policies.
+                # Un PDF híbrido puede combinar texto seleccionable y una etiqueta
+                # de seguridad como imagen. El OCR de la primera página la incluye
+                # en la evaluación de políticas semánticas.
                 visual_text = self._ocr_from_pdf(
                     pdf_path,
-                    first_page=1,
-                    last_page=1,
+                    first_page=FIRST_PDF_PAGE,
+                    last_page=FIRST_PDF_PAGE,
                 )
                 if visual_text.strip():
                     text = f"{text.rstrip()}\n{visual_text.strip()}"
             else:
-                # A PDF without embedded text is probably scanned; OCR every page.
+                # Si el PDF no contiene texto incrustado, aplica OCR a todas sus páginas.
                 text = self._ocr_from_pdf(pdf_path)
-        except Exception as e:
-            print(f"[OCR] Tesseract failed: {e}")
+        except Exception:
+            logging.getLogger(__name__).exception("Falló el procesamiento OCR del PDF.")
+            text = "\n".join(page_texts)
 
         self.last_text = text.strip()
         return self.last_text
 
+    # RF-06 — Valida ruta y disponibilidad OCR antes de iniciar el reconocimiento.
     def extract_text_from_image(self, image_path):
-        """Extract text from an image using Tesseract OCR."""
-        if not HAS_PYTESSERACT and not TESSERACT_CMD:
+        """Extrae texto de una imagen mediante Tesseract OCR."""
+        if not image_path or not os.path.isfile(image_path):
+            return ""
+        if not HAS_PYTESSERACT and not self.tesseract_cmd:
             return ""
 
         try:
             text = self._ocr_image(image_path)
             self.last_text = text.strip()
             return self.last_text
-        except Exception as e:
-            print(f"[OCR] Image OCR failed: {e}")
+        except Exception:
+            logging.getLogger(__name__).exception("Falló el reconocimiento OCR de la imagen.")
             return ""
 
+    # RF-06 — Usa dependencias y parámetros de OCR configurados por instancia.
     def _ocr_from_pdf(self, pdf_path, first_page=None, last_page=None):
-        """Convert PDF pages to images and OCR them."""
-        if not PDFTOPPM_CMD:
-            print("[OCR] pdftoppm not available; install Poppler to OCR scanned PDFs")
+        """Convierte páginas PDF en imágenes y les aplica OCR."""
+        if not self.pdftoppm_cmd:
+            logging.getLogger(__name__).warning("pdftoppm no está disponible para procesar el PDF.")
             return ""
-        if not HAS_PYTESSERACT and not TESSERACT_CMD:
-            print("[OCR] Tesseract not available; install pytesseract or tesseract CLI")
+        if not HAS_PYTESSERACT and not self.tesseract_cmd:
+            logging.getLogger(__name__).warning("Tesseract no está disponible para procesar el PDF.")
             return ""
 
         with tempfile.TemporaryDirectory(prefix="docuzen_ocr_") as tmp_dir:
             output_prefix = os.path.join(tmp_dir, "page")
             cmd = [
-                PDFTOPPM_CMD,
+                self.pdftoppm_cmd,
                 "-r",
-                "200",
+                str(PDF_RENDER_DPI),
                 "-png",
             ]
             if first_page is not None:
@@ -122,18 +149,19 @@ class OCREngine:
 
             return "\n".join(chunks)
 
+    # RF-06 — Reutiliza el idioma y el ejecutable definidos por esta instancia.
     def _ocr_image(self, image_path, page_segmentation_mode=None):
-        """Run OCR on a rendered image using the Python binding or Tesseract CLI."""
+        """Aplica OCR a una imagen renderizada mediante Python o la CLI de Tesseract."""
         config = ""
         if page_segmentation_mode is not None:
             config = f"--psm {page_segmentation_mode}"
 
         if HAS_PYTESSERACT:
             img = Image.open(image_path)
-            return pytesseract.image_to_string(img, lang=OCR_LANG, config=config)
+            return pytesseract.image_to_string(img, lang=self.language, config=config)
 
-        if TESSERACT_CMD:
-            command = [TESSERACT_CMD, image_path, "stdout", "-l", OCR_LANG]
+        if self.tesseract_cmd:
+            command = [self.tesseract_cmd, image_path, "stdout", "-l", self.language]
             if page_segmentation_mode is not None:
                 command.extend(["--psm", str(page_segmentation_mode)])
             result = subprocess.run(
@@ -147,9 +175,10 @@ class OCREngine:
 
         return ""
 
+    # RF-06 — Nombra umbrales de imagen y registra fallos sin imprimirlos.
     def _ocr_watermark(self, image_path):
-        """Extract large diagonal text ignored by normal OCR."""
-        if not HAS_PYTESSERACT and not TESSERACT_CMD:
+        """Extrae texto diagonal grande que el OCR normal podría omitir."""
+        if not HAS_PYTESSERACT and not self.tesseract_cmd:
             return ""
 
         try:
@@ -158,14 +187,20 @@ class OCREngine:
                 gray = rgb.convert("L")
                 histogram = gray.histogram()
                 background = max(
-                    range(220, 256),
+                    range(WATERMARK_BACKGROUND_MIN, GRAYSCALE_LEVELS),
                     key=lambda value: histogram[value],
                 )
-                lower_bound = max(128, background - 80)
-                upper_bound = max(lower_bound, background - 8)
+                lower_bound = max(
+                    WATERMARK_MIN_FOREGROUND,
+                    background - WATERMARK_BACKGROUND_OFFSET,
+                )
+                upper_bound = max(
+                    lower_bound,
+                    background - WATERMARK_FOREGROUND_OFFSET,
+                )
                 lookup = [
-                    0 if lower_bound <= value <= upper_bound else 255
-                    for value in range(256)
+                    0 if lower_bound <= value <= upper_bound else GRAYSCALE_MAX_VALUE
+                    for value in range(GRAYSCALE_LEVELS)
                 ]
                 gray_watermark = gray.point(lookup)
 
@@ -173,33 +208,37 @@ class OCREngine:
                 other_channels = ImageChops.lighter(green, blue)
                 red_dominance = ImageChops.subtract(red, other_channels)
                 red_lookup = [
-                    0 if value >= 25 else 255
-                    for value in range(256)
+                    0 if value >= WATERMARK_RED_DOMINANCE_THRESHOLD else GRAYSCALE_MAX_VALUE
+                    for value in range(GRAYSCALE_LEVELS)
                 ]
                 red_watermark = red_dominance.point(red_lookup)
 
-            # Remove the thin antialiasing left by dark body text while preserving
-            # the much thicker strokes used by a watermark.
+            # Elimina el suavizado fino del texto oscuro y conserva los trazos
+            # más gruesos característicos de una marca de agua.
             watermarks = []
             for watermark in (gray_watermark, red_watermark):
-                watermark = watermark.filter(ImageFilter.MaxFilter(5))
-                watermark = watermark.filter(ImageFilter.MinFilter(5))
-                if watermark.histogram()[0] >= 500:
+                watermark = watermark.filter(
+                    ImageFilter.MaxFilter(WATERMARK_MORPHOLOGY_KERNEL_SIZE)
+                )
+                watermark = watermark.filter(
+                    ImageFilter.MinFilter(WATERMARK_MORPHOLOGY_KERNEL_SIZE)
+                )
+                if watermark.histogram()[0] >= MIN_WATERMARK_PIXELS:
                     watermarks.append(watermark)
 
             chunks = []
             for mask_index, watermark in enumerate(watermarks):
-                for angle in (-45, 45):
-                    rotated = watermark.rotate(angle, expand=True, fillcolor=255)
-                    white = Image.new("L", rotated.size, 255)
+                for angle in WATERMARK_ROTATION_ANGLES:
+                    rotated = watermark.rotate(angle, expand=True, fillcolor=GRAYSCALE_MAX_VALUE)
+                    white = Image.new("L", rotated.size, GRAYSCALE_MAX_VALUE)
                     bounds = ImageChops.difference(rotated, white).getbbox()
                     if not bounds:
                         continue
 
                     candidate = ImageOps.expand(
                         rotated.crop(bounds),
-                        border=40,
-                        fill=255,
+                        border=WATERMARK_CROP_BORDER,
+                        fill=GRAYSCALE_MAX_VALUE,
                     )
                     candidate_path = (
                         f"{image_path}.watermark-{mask_index}-{angle}.png"
@@ -208,9 +247,12 @@ class OCREngine:
                         candidate.save(candidate_path)
                         text = self._ocr_image(
                             candidate_path,
-                            page_segmentation_mode=7,
+                            page_segmentation_mode=WATERMARK_OCR_PAGE_SEGMENTATION_MODE,
                         ).strip()
-                        has_word = re.search(r"[A-ZÁÉÍÓÚÑ]{4,}", text.upper())
+                        has_word = re.search(
+                            rf"[A-ZÁÉÍÓÚÑ]{{{MIN_WATERMARK_WORD_LENGTH},}}",
+                            text.upper(),
+                        )
                         if text and has_word and text.casefold() not in {
                             chunk.casefold() for chunk in chunks
                         }:
@@ -219,13 +261,17 @@ class OCREngine:
                         try:
                             os.remove(candidate_path)
                         except OSError:
-                            pass
+                            logging.getLogger(__name__).debug(
+                                "No se pudo retirar una imagen temporal de marca de agua.",
+                                exc_info=True,
+                            )
 
             return "\n".join(chunks)
-        except Exception as e:
-            print(f"[OCR] Watermark OCR failed: {e}")
+        except Exception:
+            logging.getLogger(__name__).exception("Falló la extracción OCR de marcas de agua.")
             return ""
 
+    # RF-06 — Limita cada campo con una constante y valida campos requeridos al extraer.
     def extract_nomenclature(self, text, nomenclature_fields):
         """
         Try to extract nomenclature fields from the OCR text.
@@ -239,7 +285,7 @@ class OCREngine:
 
         for field in nomenclature_fields:
             field_name = field.get("fieldName", "")
-            # Try to find patterns like "FIELD_NAME: VALUE" or "FIELD_NAME - VALUE"
+            # Busca patrones como «CAMPO: VALOR» o «CAMPO - VALOR».
             patterns = [
                 rf'{re.escape(field_name.upper())}\s*[:\-=]\s*([^\n\r]+)',
                 rf'{re.escape(field_name.upper())}\s+([A-Z0-9\-_]+)',
@@ -249,7 +295,7 @@ class OCREngine:
             for pattern in patterns:
                 match = re.search(pattern, text_upper)
                 if match:
-                    extracted = match.group(1).strip()[:50]
+                    extracted = match.group(1).strip()[:MAX_EXTRACTED_FIELD_LENGTH]
                     break
 
             if extracted:
@@ -259,8 +305,9 @@ class OCREngine:
 
         return result if result else None
 
+    # RF-06
     def extract_title_hierarchy(self, text):
-        """Extract slash-separated hierarchy from an INFORME DE RIESGO title."""
+        """Extrae una jerarquía separada por barras de un título INFORME DE RIESGO."""
         if not text:
             return None
 
@@ -280,16 +327,18 @@ class OCREngine:
         hierarchy = [segment for segment in hierarchy if segment]
         return hierarchy if len(hierarchy) > 1 else None
 
+    # RF-07
     def build_filename(self, nomenclature_data, separator="_"):
-        """Build a filename from extracted nomenclature data."""
+        """Construye un nombre de archivo a partir de los datos de nomenclatura extraídos."""
         if not nomenclature_data:
             return None
         parts = [str(v) for v in nomenclature_data.values()]
         name = separator.join(parts)
-        # Clean invalid filename characters
+        # Elimina caracteres no válidos en nombres de archivo.
         name = re.sub(r'[<>:"/\\|?*]', '', name)
         return name + ".pdf"
 
+    # RF-10
     def check_semantic_policies(self, text, policies):
         """
         Check text against semantic security policies.
@@ -306,7 +355,7 @@ class OCREngine:
         for policy in semantic_policies:
             target = policy.get("target", "").strip().lower()
             if target and target in text_lower:
-                # Count words in the target for ranking
+                # Cuenta las palabras del objetivo para ordenarlo.
                 word_count = len(target.split())
                 is_sentence = word_count > 1
                 matches.append({
@@ -318,6 +367,6 @@ class OCREngine:
         if not matches:
             return None
 
-        # Sort: more words first, then sentences beat single words
+        # Ordena primero por mayor cantidad de palabras y luego prioriza frases.
         matches.sort(key=lambda m: (m["word_count"], m["is_sentence"]), reverse=True)
         return matches[0]["policy"]

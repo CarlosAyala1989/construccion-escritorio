@@ -1,1 +1,1 @@
-# core package
+# Paquete de lógica central.

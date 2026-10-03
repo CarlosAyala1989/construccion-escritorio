@@ -1,4 +1,4 @@
-"""Cross-platform native file selection for the desktop client."""
+"""Selector nativo de archivos multiplataforma para el cliente de escritorio."""
 
 import ctypes
 import os
@@ -13,7 +13,7 @@ DIALOG_TITLE = "Seleccionar archivos para importar"
 
 
 def select_document_files():
-    """Return document paths selected with the operating system's file dialog."""
+    """Devuelve las rutas elegidas mediante el selector de archivos del sistema."""
     system = platform.system()
     if system == "Windows":
         return _select_files_windows()
@@ -25,7 +25,7 @@ def select_document_files():
 
 
 def _select_files_windows():
-    """Use the Windows common Open dialog directly, without a Tk window."""
+    """Usa directamente el cuadro de apertura de Windows, sin una ventana de Tk."""
     class OpenFileName(ctypes.Structure):
         _fields_ = [
             ("lStructSize", wintypes.DWORD),
@@ -102,7 +102,7 @@ def _parse_windows_selection(raw_selection):
 
 
 def _select_files_linux():
-    """Use the file selector matching the active Linux desktop when available."""
+    """Usa el selector disponible que corresponda al entorno de escritorio Linux."""
     desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
     candidates = ["kdialog", "zenity"] if "kde" in desktop else ["zenity", "kdialog"]
 
@@ -153,7 +153,7 @@ def _select_files_linux():
 
 
 def _select_files_tk_fallback():
-    """Keep compatibility with minimal Linux installations without KDE/GTK helpers."""
+    """Mantiene compatibilidad con Linux sin las herramientas auxiliares de KDE o GTK."""
     import tkinter as tk
     from tkinter import filedialog
 

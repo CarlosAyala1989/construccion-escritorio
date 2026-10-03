@@ -6,6 +6,9 @@ en una cabecera autenticada por AES-GCM, de modo que los pendientes sobreviven
 a pausas y reinicios sin almacenar la clave de sesión junto al documento.
 """
 
+# RF-04 — Valida sesiones y escribe folios cifrados de forma autenticada y atómica.
+
+import logging
 import os
 import tempfile
 import hmac
@@ -126,14 +129,21 @@ class SecureFileWriter:
                 os.chmod(dest_path, 0o600)
             except OSError:
                 # Windows puede no aplicar permisos POSIX; el contenido sigue cifrado.
-                pass
+                logging.getLogger(__name__).debug(
+                    "No se pudieron restringir los permisos del folio cifrado.",
+                    exc_info=True,
+                )
             return dest_path
         finally:
             if temp_path and os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
                 except OSError:
-                    pass
+                    logging.getLogger(__name__).warning(
+                        "No se pudo limpiar el archivo temporal cifrado %s.",
+                        temp_path,
+                        exc_info=True,
+                    )
 
     @classmethod
     def read_secure(cls, file_path: str) -> bytes:

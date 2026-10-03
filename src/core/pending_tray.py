@@ -1,9 +1,13 @@
+import logging
 import os
 import shutil
+
+FIRST_COLLISION_VERSION = 2
 
 class PendingTray:
     """Módulo para gestionar derivaciones a la Bandeja de Pendientes."""
 
+    # RF-08 — Deriva el archivo a pendientes y devuelve la ruta resultante.
     @staticmethod
     def HandleOCRFailure(file_path, base_pending_dir):
         """
@@ -14,18 +18,18 @@ class PendingTray:
         filename = os.path.basename(file_path)
         dest_path = os.path.join(base_pending_dir, filename)
         
-        # Prevent collisions
+        # Evita colisiones de nombres.
         base, ext = os.path.splitext(dest_path)
-        v = 2
+        version = FIRST_COLLISION_VERSION
         while os.path.exists(dest_path):
-            dest_path = f"{base}_v{v}{ext}"
-            v += 1
+            dest_path = f"{base}_v{version}{ext}"
+            version += 1
             
         try:
-            # We use copy then remove instead of move across filesystems just in case
+            # Copia y luego elimina para funcionar incluso entre sistemas de archivos.
             shutil.copy2(file_path, dest_path)
             os.remove(file_path)
             return dest_path
-        except Exception as e:
-            print(f"[PENDING TRAY] Error: {e}")
+        except OSError:
+            logging.getLogger(__name__).exception("No se pudo derivar el documento a pendientes.")
             return None

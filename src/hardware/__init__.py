@@ -1,1 +1,1 @@
-# hardware package
+# Paquete de integración con hardware.

@@ -7,6 +7,7 @@ Usa las credenciales (refresh_token + folder ID) almacenadas por el admin en la 
 
 import hashlib
 import json
+import logging
 import os
 import shutil
 from src.app_paths import CLOUD_OUTPUT_DIR, PROCESSED_DIR, ensure_runtime_dirs
@@ -23,32 +24,43 @@ try:
 except ImportError:
     HAS_REQUESTS = False
 
-# Google OAuth2 token endpoint
+# Punto de acceso de tokens OAuth2 de Google.
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
 GOOGLE_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files"
 GOOGLE_FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
 DRIVE_SHA256_PROPERTY = "sha256"
+GOOGLE_API_TIMEOUT_SECONDS = 30
+HTTP_OK = 200
+HTTP_CREATED = 201
+SMALL_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
+DRIVE_PAGE_SIZE = 1000
+GOOGLE_FOLDER_SEARCH_PAGE_SIZE = 1
+SHA256_CHUNK_SIZE = 1024 * 1024
+FIRST_COLLISION_VERSION = 2
+DEFAULT_COMPRESSION_THRESHOLD_MB = 10
+BYTES_PER_MEGABYTE = 1024 * 1024
 
 
 class CloudUploader:
     """
-    Handles document upload to cloud destinations.
-    Uses Strategy pattern for different cloud providers.
+    Gestiona la carga de documentos en destinos de nube.
+    Usa el patrón Strategy para admitir distintos proveedores.
     """
 
     def __init__(self, config=None):
         self.config = config or {}
 
+    # RF-13 — Valida el origen y delega la subida según el proveedor configurado.
     def upload(self, file_path, cloud_path, workspace_name=None, workspace=None):
         """
-        Upload a file to the cloud destination.
-        `workspace` dict must contain cloudFolderId and cloudRefreshToken for Google Drive.
+        Carga un archivo en el destino de nube.
+        Para Google Drive, `workspace` debe incluir cloudFolderId y cloudRefreshToken.
         """
-        if not os.path.exists(file_path):
+        if not os.path.isfile(file_path):
             return {"success": False, "error": f"Archivo no encontrado: {file_path}", "provider": "NONE"}
 
-        # Determine provider from cloudPath
+        # Determina el proveedor a partir de cloudPath.
         if cloud_path.startswith("Google Drive:"):
             return self._upload_gdrive(file_path, workspace)
         elif cloud_path.startswith("Dropbox:"):
@@ -59,15 +71,20 @@ class CloudUploader:
         else:
             return self._upload_local(file_path, cloud_path, workspace_name)
 
-    # ─── Google Drive Upload ─────────────────────────
+    # ─── Carga en Google Drive ───────────────────────
 
+    # RF-13 — Renueva credenciales, organiza carpetas y devuelve el resultado de Drive.
     def _upload_gdrive(self, file_path, workspace):
-        """Upload file to Google Drive using stored refresh token and folder ID."""
+        """Carga un archivo en Google Drive con el token y el ID de carpeta guardados."""
         if not HAS_REQUESTS:
             return {"success": False, "error": "Librería 'requests' no disponible", "provider": "GOOGLE_DRIVE"}
 
         if not workspace:
-            return {"success": False, "error": "No hay workspace con credenciales de Drive", "provider": "GOOGLE_DRIVE"}
+            return {
+                "success": False,
+                "error": "No hay workspace con credenciales de Drive",
+                "provider": "GOOGLE_DRIVE",
+            }
 
         folder_id = workspace.get("cloudFolderId")
         refresh_token = workspace.get("cloudRefreshToken")
@@ -75,17 +92,35 @@ class CloudUploader:
         client_secret = self.config.get("googleClientSecret", "")
 
         if not folder_id:
-            return {"success": False, "error": "No se configuró un folder ID de Google Drive en el workspace", "provider": "GOOGLE_DRIVE"}
+            return {
+                "success": False,
+                "error": "No se configuró un folder ID de Google Drive en el workspace",
+                "provider": "GOOGLE_DRIVE",
+            }
 
         if not refresh_token:
-            return {"success": False, "error": "No se configuró un refresh token de Google Drive. El administrador debe re-vincular la carpeta desde la web.", "provider": "GOOGLE_DRIVE"}
+            return {
+                "success": False,
+                "error": (
+                    "No se configuró un refresh token de Google Drive. "
+                    "El administrador debe re-vincular la carpeta desde la web."
+                ),
+                "provider": "GOOGLE_DRIVE",
+            }
 
-        # Step 1: Get a fresh access token using the refresh token
+        # Paso 1: obtiene un token de acceso vigente a partir del token de renovación.
         access_token = self._refresh_access_token(refresh_token, client_id, client_secret)
         if not access_token:
-            return {"success": False, "error": "No se pudo renovar el token de acceso de Google Drive. El admin debe re-autorizar.", "provider": "GOOGLE_DRIVE"}
+            return {
+                "success": False,
+                "error": (
+                    "No se pudo renovar el token de acceso de Google Drive. "
+                    "El admin debe re-autorizar."
+                ),
+                "provider": "GOOGLE_DRIVE",
+            }
 
-        # Step 2: Upload the file to Drive via multipart upload
+        # Paso 2: carga el archivo en Drive mediante una solicitud multipart.
         try:
             filename = os.path.basename(file_path)
             file_size = os.path.getsize(file_path)
@@ -102,22 +137,26 @@ class CloudUploader:
                 folder_parts,
                 access_token,
             )
-            # Metadata part
+            # Prepara los metadatos del archivo.
             metadata = {
                 "name": filename,
                 "parents": [target_folder_id],
                 "appProperties": {DRIVE_SHA256_PROPERTY: sha256},
             }
 
-            # Use multipart upload for files < 5MB, resumable for larger
-            if file_size < 5 * 1024 * 1024:
+            # Usa carga multipart para archivos pequeños y reanudable para los grandes.
+            if file_size < SMALL_UPLOAD_MAX_BYTES:
                 result = self._simple_upload(file_path, metadata, access_token)
             else:
                 result = self._resumable_upload(file_path, metadata, access_token)
 
             if result.get("id"):
                 stored_filename = result.get("name") or filename
-                print(f"[UPLOAD] ✅ Subido a Google Drive: {stored_filename} (ID: {result['id']})")
+                logging.getLogger(__name__).info(
+                    "Archivo subido a Google Drive: %s (ID: %s)",
+                    stored_filename,
+                    result["id"],
+                )
                 drive_path = "/".join(folder_parts + [stored_filename])
                 return {
                     "success": True,
@@ -133,12 +172,12 @@ class CloudUploader:
                     "provider": "GOOGLE_DRIVE",
                 }
 
-        except Exception as e:
-            print(f"[UPLOAD] ❌ Error subiendo a Google Drive: {e}")
-            return {"success": False, "error": str(e), "provider": "GOOGLE_DRIVE"}
+        except Exception as error:
+            logging.getLogger(__name__).exception("Falló la subida del archivo a Google Drive.")
+            return {"success": False, "error": str(error), "provider": "GOOGLE_DRIVE"}
 
     def _ensure_gdrive_folders(self, root_folder_id, folder_parts, access_token):
-        """Find or create each folder below the workspace root."""
+        """Busca o crea cada carpeta debajo de la carpeta raíz del espacio."""
         current_folder_id = root_folder_id
         for folder_name in folder_parts:
             existing_id = self._find_gdrive_folder(
@@ -153,6 +192,7 @@ class CloudUploader:
             )
         return current_folder_id
 
+    # RF-13 — Busca una carpeta hija existente para mantener la estructura remota.
     def _find_gdrive_folder(self, parent_id, folder_name, access_token):
         escaped_parent = self._escape_drive_query_value(parent_id)
         escaped_name = self._escape_drive_query_value(folder_name)
@@ -166,13 +206,13 @@ class CloudUploader:
             params={
                 "q": query,
                 "fields": "files(id,name)",
-                "pageSize": 1,
+                "pageSize": GOOGLE_FOLDER_SEARCH_PAGE_SIZE,
                 "supportsAllDrives": "true",
                 "includeItemsFromAllDrives": "true",
             },
-            timeout=30,
+            timeout=GOOGLE_API_TIMEOUT_SECONDS,
         )
-        if response.status_code != 200:
+        if response.status_code != HTTP_OK:
             raise RuntimeError(
                 f"No se pudo buscar la carpeta '{folder_name}' en Drive: "
                 f"{response.text}"
@@ -181,6 +221,7 @@ class CloudUploader:
         files = response.json().get("files", [])
         return files[0].get("id") if files else None
 
+    # RF-13 — Crea una carpeta hija y valida que Drive devuelva su identificador.
     def _create_gdrive_folder(self, parent_id, folder_name, access_token):
         response = http_requests.post(
             GOOGLE_FILES_URL,
@@ -191,9 +232,9 @@ class CloudUploader:
                 "mimeType": GOOGLE_FOLDER_MIME_TYPE,
                 "parents": [parent_id],
             },
-            timeout=30,
+            timeout=GOOGLE_API_TIMEOUT_SECONDS,
         )
-        if response.status_code not in (200, 201):
+        if response.status_code not in (HTTP_OK, HTTP_CREATED):
             raise RuntimeError(
                 f"No se pudo crear la carpeta '{folder_name}' en Drive: "
                 f"{response.text}"
@@ -210,8 +251,9 @@ class CloudUploader:
     def _escape_drive_query_value(value):
         return str(value).replace("\\", "\\\\").replace("'", "\\'")
 
+    # RF-14
     def _resolve_gdrive_collision_name(self, parent_id, filename, access_token):
-        """Return filename or the first available _vN variant in Drive."""
+        """Devuelve el nombre original o la primera variante _vN disponible en Drive."""
         escaped_parent = self._escape_drive_query_value(parent_id)
         page_token = None
         existing_names = set()
@@ -220,7 +262,7 @@ class CloudUploader:
             params = {
                 "q": f"'{escaped_parent}' in parents and trashed = false",
                 "fields": "nextPageToken,files(name)",
-                "pageSize": 1000,
+                "pageSize": DRIVE_PAGE_SIZE,
                 "supportsAllDrives": "true",
                 "includeItemsFromAllDrives": "true",
             }
@@ -231,9 +273,9 @@ class CloudUploader:
                 GOOGLE_FILES_URL,
                 headers={"Authorization": f"Bearer {access_token}"},
                 params=params,
-                timeout=30,
+                timeout=GOOGLE_API_TIMEOUT_SECONDS,
             )
-            if response.status_code != 200:
+            if response.status_code != HTTP_OK:
                 raise RuntimeError(
                     "No se pudo verificar colisiones de nombre en Google Drive: "
                     f"{response.text}"
@@ -253,15 +295,16 @@ class CloudUploader:
             return filename
 
         base, extension = os.path.splitext(filename)
-        version = 2
+        version = FIRST_COLLISION_VERSION
         candidate = f"{base}_v{version}{extension}"
         while candidate in existing_names:
             version += 1
             candidate = f"{base}_v{version}{extension}"
         return candidate
 
+    # RF-13 — Renueva el token OAuth y registra de forma segura los fallos de red.
     def _refresh_access_token(self, refresh_token, client_id, client_secret):
-        """Exchange a refresh token for a new access token."""
+        """Intercambia un token de renovación por un nuevo token de acceso."""
         try:
             resp = http_requests.post(GOOGLE_TOKEN_URL, data={
                 "grant_type": "refresh_token",
@@ -270,18 +313,23 @@ class CloudUploader:
                 "client_secret": client_secret,
             })
 
-            if resp.status_code == 200:
+            if resp.status_code == HTTP_OK:
                 data = resp.json()
                 return data.get("access_token")
             else:
-                print(f"[UPLOAD] Token refresh failed ({resp.status_code}): {resp.text}")
+                logging.getLogger(__name__).warning(
+                    "Falló la renovación del token de Drive (HTTP %s): %s",
+                    resp.status_code,
+                    resp.text,
+                )
                 return None
-        except Exception as e:
-            print(f"[UPLOAD] Token refresh error: {e}")
+        except Exception:
+            logging.getLogger(__name__).exception("Falló la renovación del token de Drive.")
             return None
 
+    # RF-13 — Sube archivos pequeños y devuelve metadatos o un error estructurado.
     def _simple_upload(self, file_path, metadata, access_token):
-        """Multipart upload for small files (<5MB)."""
+        """Carga archivos pequeños mediante una solicitud multipart."""
         import io
 
         boundary = "gobernanza_boundary_upload"
@@ -293,7 +341,7 @@ class CloudUploader:
             access_token,
         )
 
-        # Determine MIME type
+        # Determina el tipo MIME.
         ext = os.path.splitext(filename)[1].lower()
         mime_map = {
             ".pdf": "application/pdf",
@@ -305,7 +353,7 @@ class CloudUploader:
         }
         mime_type = mime_map.get(ext, "application/octet-stream")
 
-        # Build multipart body
+        # Construye el cuerpo multipart.
         meta_json = json.dumps(metadata)
         with open(file_path, "rb") as f:
             file_data = f.read()
@@ -328,14 +376,19 @@ class CloudUploader:
             data=body.getvalue(),
         )
 
-        if resp.status_code in (200, 201):
+        if resp.status_code in (HTTP_OK, HTTP_CREATED):
             return resp.json()
         else:
-            print(f"[UPLOAD] Simple upload failed ({resp.status_code}): {resp.text}")
+            logging.getLogger(__name__).warning(
+                "Falló la subida simple a Drive (HTTP %s): %s",
+                resp.status_code,
+                resp.text,
+            )
             return {"error": resp.text}
 
+    # RF-13 — Sube archivos grandes mediante la sesión reanudable de Google Drive.
     def _resumable_upload(self, file_path, metadata, access_token):
-        """Resumable upload for large files (>5MB)."""
+        """Carga archivos grandes mediante una sesión reanudable."""
         filename = os.path.basename(file_path)
         metadata = dict(metadata)
         metadata["name"] = self._resolve_gdrive_collision_name(
@@ -352,7 +405,7 @@ class CloudUploader:
         }
         mime_type = mime_map.get(ext, "application/octet-stream")
 
-        # Step 1: Initiate the upload
+        # Paso 1: inicia la carga.
         init_resp = http_requests.post(
             f"{GOOGLE_UPLOAD_URL}?uploadType=resumable&supportsAllDrives=true",
             headers={
@@ -362,14 +415,14 @@ class CloudUploader:
             json=metadata,
         )
 
-        if init_resp.status_code != 200:
+        if init_resp.status_code != HTTP_OK:
             return {"error": f"Resumable init failed: {init_resp.text}"}
 
         upload_url = init_resp.headers.get("Location")
         if not upload_url:
             return {"error": "No upload URL returned"}
 
-        # Step 2: Upload the file
+        # Paso 2: envía el archivo.
         file_size = os.path.getsize(file_path)
         with open(file_path, "rb") as f:
             resp = http_requests.put(
@@ -381,16 +434,17 @@ class CloudUploader:
                 data=f,
             )
 
-        if resp.status_code in (200, 201):
+        if resp.status_code in (HTTP_OK, HTTP_CREATED):
             return resp.json()
         else:
             return {"error": f"Resumable upload failed: {resp.text}"}
 
-    # ─── Local Destination Upload ─────────────────────
+    # ─── Carga en destino local ──────────────────────
 
+    # RF-13 — Copia el archivo al destino local y devuelve el resultado estructurado.
     def _upload_local_dest(self, file_path, dest_path, workspace_name=None):
-        """Copy file to a specific local directory path."""
-        # Expand ~ home directory
+        """Copia el archivo en una ruta de destino local específica."""
+        # Expande ~ como la ruta del directorio personal.
         dest_path = os.path.expanduser(dest_path)
 
         if workspace_name:
@@ -405,16 +459,18 @@ class CloudUploader:
 
         try:
             shutil.copy2(file_path, dest)
-            print(f"[UPLOAD] ✅ Copiado a local: {dest}")
+            logging.getLogger(__name__).info("Archivo copiado al destino local: %s", dest)
             return {"success": True, "destination": dest, "provider": "LOCAL"}
-        except Exception as e:
-            return {"success": False, "error": str(e), "provider": "LOCAL"}
+        except OSError as error:
+            logging.getLogger(__name__).exception("No se pudo copiar el archivo al destino local.")
+            return {"success": False, "error": str(error), "provider": "LOCAL"}
 
+    # RF-13 — Copia al directorio local de salida y devuelve un resultado reintentable.
     def _upload_local(self, file_path, cloud_path, workspace_name=None):
-        """Copy file to a local output directory simulating cloud upload."""
+        """Copia el archivo en una carpeta local que simula una carga a la nube."""
         ensure_runtime_dirs()
 
-        # Build output path
+        # Construye la ruta de salida.
         output_base = CLOUD_OUTPUT_DIR
         if workspace_name:
             output_dir = os.path.join(output_base, workspace_name)
@@ -435,35 +491,37 @@ class CloudUploader:
                 "destination": dest,
                 "provider": "LOCAL",
             }
-        except Exception as e:
+        except OSError as error:
+            logging.getLogger(__name__).exception("No se pudo copiar el archivo al directorio de salida.")
             return {
                 "success": False,
-                "error": str(e),
+                "error": str(error),
                 "provider": "LOCAL",
             }
 
     def _upload_dropbox(self, file_path, cloud_path):
-        """Dropbox upload (placeholder for future implementation)."""
+        """Carga en Dropbox (marcador para una implementación futura)."""
         return {
             "success": False,
             "error": "Dropbox upload not yet implemented. Use manual upload.",
             "provider": "DROPBOX",
         }
 
-    # ─── Utilities ───────────────────────────────────
+    # ─── Utilidades ──────────────────────────────────
 
+    # RF-13/RF-14 — Calcula SHA-256 en bloques para identificar el contenido transferido.
     @staticmethod
     def _calculate_sha256(file_path):
-        """Calculate the SHA-256 fingerprint of the exact bytes sent to storage."""
+        """Calcula la huella SHA-256 de los bytes exactos enviados al almacenamiento."""
         digest = hashlib.sha256()
         with open(file_path, "rb") as file:
-            for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            for chunk in iter(lambda: file.read(SHA256_CHUNK_SIZE), b""):
                 digest.update(chunk)
         return digest.hexdigest()
 
     @staticmethod
     def _processed_relative_path(file_path):
-        """Return a safe path relative to the processed document directory."""
+        """Devuelve una ruta segura relativa al directorio de documentos procesados."""
         root_path = os.path.abspath(PROCESSED_DIR)
         absolute_path = os.path.abspath(file_path)
         try:
@@ -480,20 +538,22 @@ class CloudUploader:
         ]
         return os.path.join(*parts) if parts else os.path.basename(file_path)
 
+    # RF-14 — Evita colisiones usando la primera variante de nombre disponible.
     def _prevent_collision(self, path):
-        """Prevent filename collision."""
+        """Evita colisiones de nombres de archivo."""
         if not os.path.exists(path):
             return path
         base, ext = os.path.splitext(path)
-        v = 2
-        while os.path.exists(f"{base}_v{v}{ext}"):
-            v += 1
-        return f"{base}_v{v}{ext}"
+        version = FIRST_COLLISION_VERSION
+        while os.path.exists(f"{base}_v{version}{ext}"):
+            version += 1
+        return f"{base}_v{version}{ext}"
 
+    # RF-15 — Reescribe las páginas y devuelve si la compresión del PDF fue exitosa.
     def compress_pdf(self, input_path, output_path):
         """
-        Compress a PDF by re-writing it (basic compression).
-        Returns True if compressed successfully.
+        Comprime un PDF al volver a escribirlo (compresión básica).
+        Devuelve True si la compresión finaliza correctamente.
         """
         if not HAS_PYPDF2:
             return False
@@ -508,11 +568,16 @@ class CloudUploader:
                 writer.write(f)
 
             return True
-        except Exception as e:
-            print(f"[UPLOAD] Compression failed: {e}")
+        except Exception:
+            logging.getLogger(__name__).exception("Falló la compresión del PDF.")
             return False
 
-    def should_compress(self, file_path, threshold_mb=10):
-        """Check if file exceeds compression threshold."""
-        size_mb = os.path.getsize(file_path) / (1024 * 1024)
+    # RF-15 — Compara el tamaño con el umbral de compresión configurable.
+    def should_compress(
+        self,
+        file_path,
+        threshold_mb=DEFAULT_COMPRESSION_THRESHOLD_MB,
+    ):
+        """Comprueba si el archivo supera el umbral de compresión."""
+        size_mb = os.path.getsize(file_path) / BYTES_PER_MEGABYTE
         return size_mb > threshold_mb

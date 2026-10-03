@@ -4,32 +4,33 @@ Fase 3: Seguridad Visual (Marcas de agua, sellos, firmas).
 VISUAL tiene prioridad absoluta sobre SEMANTIC.
 """
 
+# RF-10 — Analiza marcas visuales y devuelve la política coincidente de mayor prioridad.
+
+import logging
 import os
 import cv2
 import numpy as np
 from src.app_paths import TEMPLATES_DIR, ensure_runtime_dirs
 
-try:
-    from PIL import Image
-    HAS_PIL = True
-except ImportError:
-    HAS_PIL = False
+TEMPLATE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp")
+SUPPORTED_IMAGE_EXTENSIONS = TEMPLATE_EXTENSIONS + (".tiff",)
+VISUAL_MATCH_THRESHOLD = 0.7
+FIRST_PDF_PAGE_INDEX = 0
 
-
-# Directory for visual template images
+# Directorio de imágenes de plantillas visuales.
 ensure_runtime_dirs()
 
 
 class VisionEngine:
-    """Engine for visual security detection using OpenCV Template Matching."""
+    """Motor de detección de seguridad visual mediante coincidencia de plantillas OpenCV."""
 
     def __init__(self):
         self.templates = {}
 
     def load_templates(self, visual_policies):
         """
-        Load template images for each visual policy.
-        Templates should be stored in data/templates/ with the target name.
+        Carga imágenes de plantilla para cada política visual.
+        Las plantillas deben guardarse en data/templates/ con el nombre del objetivo.
         """
         self.templates = {}
         for policy in visual_policies:
@@ -37,8 +38,8 @@ class VisionEngine:
                 continue
 
             target = policy.get("target", "")
-            # Look for template image files
-            for ext in [".png", ".jpg", ".jpeg", ".bmp"]:
+            # Busca archivos de imagen de plantilla.
+            for ext in TEMPLATE_EXTENSIONS:
                 template_path = os.path.join(TEMPLATES_DIR, target + ext)
                 if os.path.exists(template_path):
                     template_img = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
@@ -47,13 +48,13 @@ class VisionEngine:
                             "image": template_img,
                             "policy": policy,
                         }
-                        print(f"[VISION] Loaded template: {target}")
+                        logging.getLogger(__name__).debug("Plantilla visual cargada: %s", target)
                     break
 
     def check_visual_policies(self, image_path, policies=None):
         """
-        Check an image/PDF page for visual matches against loaded templates.
-        Returns the matching policy with highest priority, or None.
+        Comprueba si una imagen o página PDF coincide con las plantillas cargadas.
+        Devuelve la política coincidente de mayor prioridad o None.
         """
         if not self.templates:
             if policies:
@@ -61,13 +62,13 @@ class VisionEngine:
             if not self.templates:
                 return None
 
-        # Load the target image
+        # Carga la imagen objetivo.
         try:
             target_img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
             if target_img is None:
                 return None
-        except Exception as e:
-            print(f"[VISION] Failed to load image {image_path}: {e}")
+        except cv2.error:
+            logging.getLogger(__name__).exception("No se pudo cargar la imagen para análisis visual.")
             return None
 
         matches = []
@@ -76,50 +77,59 @@ class VisionEngine:
             policy = template_data["policy"]
 
             try:
-                # Perform template matching
+                # Busca coincidencias entre las plantillas y la imagen.
                 result = cv2.matchTemplate(target_img, template_img, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
-                # Threshold for a positive match (0.7 = 70% confidence)
-                if max_val >= 0.7:
+                if max_val >= VISUAL_MATCH_THRESHOLD:
                     matches.append({
                         "policy": policy,
                         "confidence": max_val,
                         "location": max_loc,
                         "target": target_name,
                     })
-                    print(f"[VISION] Match found: {target_name} (confidence: {max_val:.2f})")
-            except Exception as e:
-                print(f"[VISION] Template matching failed for {target_name}: {e}")
+                    logging.getLogger(__name__).debug(
+                        "Coincidencia visual %s con confianza %.2f.",
+                        target_name,
+                        max_val,
+                    )
+            except cv2.error:
+                logging.getLogger(__name__).exception(
+                    "Falló la comparación con la plantilla visual %s.",
+                    target_name,
+                )
 
         if not matches:
             return None
 
-        # Return highest priority match
+        # Devuelve la coincidencia de mayor prioridad.
         matches.sort(key=lambda m: (m["policy"].get("priority", 0), m["confidence"]), reverse=True)
         return matches[0]["policy"]
 
     def pdf_page_to_image(self, pdf_path, page_num=0):
         """
-        Convert a PDF page to a temporary image for vision analysis.
-        Returns the path to the temp image, or None.
+        Convierte una página PDF en una imagen temporal para el análisis visual.
+        Devuelve la ruta de la imagen temporal o None.
         """
+        if not os.path.isfile(pdf_path):
+            return None
+
         try:
             from PyPDF2 import PdfReader
-            # Simple approach: extract images from PDF
+            # Extrae imágenes del PDF.
             reader = PdfReader(pdf_path)
-            if page_num >= len(reader.pages):
+            if page_num < 0 or page_num >= len(reader.pages):
                 return None
 
             page = reader.pages[page_num]
 
-            # Try to extract the first image from the page
+            # Intenta extraer la primera imagen de la página.
             if "/XObject" in page["/Resources"]:
                 x_objects = page["/Resources"]["/XObject"].get_object()
                 for obj_name in x_objects:
                     obj = x_objects[obj_name].get_object()
                     if obj["/Subtype"] == "/Image":
-                        # Extract image data
+                        # Extrae los datos de la imagen.
                         data = obj.get_data()
                         temp_path = os.path.join(TEMPLATES_DIR, f"_temp_page_{page_num}.png")
 
@@ -129,19 +139,25 @@ class VisionEngine:
                         img = np.frombuffer(data, dtype=np.uint8)
                         try:
                             img = img.reshape((height, width, -1))
-                            cv2.imwrite(temp_path, img)
+                            if not cv2.imwrite(temp_path, img):
+                                raise OSError("OpenCV no pudo escribir la página temporal.")
                             return temp_path
-                        except Exception:
+                        except (ValueError, cv2.error, OSError):
+                            logging.getLogger(__name__).debug(
+                                "No se pudo convertir una imagen incrustada de la página %s.",
+                                page_num,
+                                exc_info=True,
+                            )
                             continue
-        except Exception as e:
-            print(f"[VISION] PDF to image conversion failed: {e}")
+        except Exception:
+            logging.getLogger(__name__).exception("No se pudo convertir la página PDF para análisis visual.")
 
         return None
 
     def check_document(self, file_path, policies):
         """
-        Check a document (PDF or image) against visual policies.
-        Returns matching policy or None.
+        Compara un documento (PDF o imagen) con las políticas visuales.
+        Devuelve la política coincidente o None.
         """
         if not policies:
             return None
@@ -152,21 +168,24 @@ class VisionEngine:
 
         self.load_templates(visual_policies)
 
-        # If it's an image file, check directly
+        # Si es una imagen, la analiza directamente.
         ext = os.path.splitext(file_path)[1].lower()
-        if ext in [".png", ".jpg", ".jpeg", ".bmp", ".tiff"]:
+        if ext in SUPPORTED_IMAGE_EXTENSIONS:
             return self.check_visual_policies(file_path)
 
-        # If it's a PDF, convert pages to images and check
+        # Si es un PDF, convierte sus páginas en imágenes y las analiza.
         if ext == ".pdf":
-            temp_img = self.pdf_page_to_image(file_path, page_num=0)
+            temp_img = self.pdf_page_to_image(file_path, page_num=FIRST_PDF_PAGE_INDEX)
             if temp_img:
                 result = self.check_visual_policies(temp_img)
-                # Clean up temp file
+                # Elimina la imagen temporal.
                 try:
                     os.remove(temp_img)
                 except OSError:
-                    pass
+                    logging.getLogger(__name__).warning(
+                        "No se pudo eliminar la imagen temporal del análisis visual.",
+                        exc_info=True,
+                    )
                 return result
 
         return None

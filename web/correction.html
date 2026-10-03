@@ -7,10 +7,10 @@
     <script type="text/javascript" src="/eel.js"></script>
     <style>
         :root {
-            /* Fonts */
+            /* Fuentes tipográficas */
             --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Icons", "Helvetica Neue", Helvetica, Arial, sans-serif;
             
-            /* Light Theme */
+            /* Tema claro */
             --bg-app: #f5f5f7;
             --bg-card: #ffffff;
             --border-color: rgba(0, 0, 0, 0.08);
@@ -209,7 +209,7 @@
     </div>
 
     <script>
-        // Get doc info from URL params
+        // Obtiene los datos del documento desde los parámetros de la URL.
         const params = new URLSearchParams(window.location.search);
         const docId = params.get('id');
         const originalName = params.get('name');
@@ -218,6 +218,7 @@
         document.getElementById('originalName').textContent = originalName || '—';
         document.getElementById('errorMessage').textContent = error || '—';
 
+        // RF-11
         async function handleCorrection(e) {
             e.preventDefault();
             const newName = document.getElementById('newFileName').value.trim();

@@ -1,5 +1,7 @@
 """Estado y reglas de acceso para una sesión de captura de escritorio (RF-03)."""
 
+# RF-03
+
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
@@ -20,7 +22,7 @@ class CaptureContextError(Exception):
 
 @dataclass
 class DesktopSessionContext:
-    """Encapsula usuario, workspace y sesión activa sin exponer globals independientes."""
+    """Encapsula el usuario, el espacio de trabajo y la sesión activa sin exponer variables globales independientes."""
 
     user: Optional[Dict[str, Any]] = None
     workspace: Optional[Dict[str, Any]] = None
@@ -55,7 +57,7 @@ class DesktopSessionContext:
 
 
 def find_assigned_workspace(db, context: DesktopSessionContext, workspace_id: str):
-    """Devuelve el workspace solicitado solo si sigue asignado al usuario autenticado."""
+    """Devuelve el espacio solicitado solo si sigue asignado al usuario autenticado."""
     if not context.user:
         raise CaptureContextError(USER_REQUIRED_ERROR)
 
@@ -78,13 +80,13 @@ def validate_selected_workspace(db, context: DesktopSessionContext):
         context.workspace = None
         raise CaptureContextError(WORKSPACE_NOT_ASSIGNED_ERROR)
 
-    # Refresca metadatos/credenciales del workspace sin permitir cambiar su identidad.
+    # Actualiza metadatos y credenciales del espacio sin permitir cambiar su identidad.
     context.workspace = assigned_workspace
     return assigned_workspace
 
 
 def require_active_capture_context(db, context: DesktopSessionContext) -> Tuple[Dict[str, Any], str]:
-    """Exige sesión activa y workspace vigente; devuelve ambos valores de forma explícita."""
+    """Exige una sesión activa y un espacio vigente; devuelve ambos valores explícitamente."""
     if not context.has_active_session:
         raise CaptureContextError(SESSION_REQUIRED_ERROR)
 

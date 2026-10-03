@@ -1,4 +1,4 @@
-# System packages for scanned PDF OCR: poppler-utils, tesseract-ocr, tesseract-ocr-spa
+# Paquetes del sistema para OCR de PDF escaneados: poppler-utils, tesseract-ocr, tesseract-ocr-spa.
 Eel>=0.16.0
 pytesseract>=0.3.10
 opencv-python-headless>=4.8.0.76

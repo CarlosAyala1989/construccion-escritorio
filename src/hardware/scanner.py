@@ -4,6 +4,7 @@ Fase 1: vigilancia de carpetas y captura física con almacenamiento temporal cif
 """
 
 from io import BytesIO
+import logging
 import os
 import shutil
 import subprocess
@@ -26,14 +27,26 @@ TEMP_ROOT_DIR = TEMP_WORKSPACE_DIR
 SUPPORTED_DOCUMENT_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".bmp"}
 SCAN_RESOLUTION_DPI = 300
 SESSION_DIRECTORY_PREFIX = "session_"
+FILE_WRITE_SETTLE_SECONDS = 1
+OBSERVER_JOIN_TIMEOUT_SECONDS = 2
+SCANNER_RETRY_DELAY_SECONDS = 2
+FIRST_DEVICE_INDEX = 1
+SCANNER_DEVICE_TYPE = 1
+FIRST_WIA_ITEM_INDEX = 1
+PROCESS_SUCCESS_RETURN_CODE = 0
+SCAN_IMAGE_FORMAT_ID = "{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}"
+SCAN_FILENAME_ID_LENGTH = 8
+WIA_COLOR_MODE = 1
+WIA_FILE_FORMAT_PDF = 4
 
 
 class PDFHandler(FileSystemEventHandler):
-    """Observa la carpeta de entrada y deriva documentos terminados al scanner."""
+    """Observa la carpeta de entrada y deriva los documentos terminados al escáner."""
 
     def __init__(self, callback):
         self.callback = callback
 
+    # RF-04 — Filtra formatos compatibles y espera a que termine la escritura fuente.
     def on_created(self, event):
         if event.is_directory:
             return
@@ -43,7 +56,7 @@ class PDFHandler(FileSystemEventHandler):
             return
 
         # El evento puede dispararse antes de que la aplicación origen termine de escribir.
-        time.sleep(1)
+        time.sleep(FILE_WRITE_SETTLE_SECONDS)
         if os.path.exists(event.src_path):
             self.callback(event.src_path)
 
@@ -62,6 +75,7 @@ class ScannerManager:
         self.memory_queue = []
         self.on_file_callback = on_file_callback
 
+    # RF-04 — Inicia la captura cifrada y devuelve si el monitoreo quedó activo.
     def start_watching(self):
         """Inicia la sesión de ingesta y crea su directorio temporal cifrado."""
         if self._running:
@@ -74,7 +88,9 @@ class ScannerManager:
         self._ingest_existing_watch_files()
 
         if not HAS_WATCHDOG:
-            print("[SCANNER] watchdog no disponible; monitoreo de carpeta deshabilitado")
+            logging.getLogger(__name__).warning(
+                "watchdog no está disponible; el monitoreo de carpeta queda deshabilitado."
+            )
             return False
 
         handler = PDFHandler(self._on_new_file)
@@ -83,12 +99,15 @@ class ScannerManager:
         self._observer.daemon = True
         self._observer.start()
         self._running = True
-        print(f"[SCANNER] Watching folder: {WATCH_DIR}")
-        print(f"[RF-04] Directorio temporal cifrado: {self._session_temp_dir}")
+        logging.getLogger(__name__).info("Monitoreando la carpeta de captura: %s", WATCH_DIR)
+        logging.getLogger(__name__).debug(
+            "Directorio temporal cifrado de la sesión: %s",
+            self._session_temp_dir,
+        )
         return True
 
     def _ingest_existing_watch_files(self):
-        """Recover supported files left in the watch folder by a prior interruption."""
+        """Recupera archivos compatibles que quedaron en la carpeta vigilada tras una interrupción."""
         for file_name in sorted(os.listdir(WATCH_DIR)):
             file_path = os.path.join(WATCH_DIR, file_name)
             if not os.path.isfile(file_path):
@@ -98,32 +117,35 @@ class ScannerManager:
             if not self._process_file_internal(file_path, remove_source=True):
                 break
 
+    # RF-04 — Detiene el watcher y conserva el lote cifrado para su procesamiento.
     def stop_watching(self):
         """Detiene la captura; conserva los folios cifrados para el procesamiento posterior."""
         if self._observer and self._running:
             self._observer.stop()
-            self._observer.join(timeout=2)
+            self._observer.join(timeout=OBSERVER_JOIN_TIMEOUT_SECONDS)
             self._observer = None
             self._running = False
-            print("[SCANNER] Stopped watching folder")
+            logging.getLogger(__name__).info("Se detuvo el monitoreo de la carpeta.")
 
         if self._capture_storage_active:
             SecureFileWriter.deactivate_session(self._secure_session_id)
             self._capture_storage_active = False
 
+    # RF-05 — Pausa la ingesta sin borrar folios y devuelve su estado al llamador.
     def pause_capture(self, reason=None):
-        """Pause ingestion without deleting encrypted folios already captured."""
+        """Pausa la ingesta sin eliminar los folios ya capturados y cifrados."""
         self.is_paused = True
         self.pause_reason = str(reason or "Atasco o fallo mecánico del escáner.")
-        print(f"[RF-05] Captura pausada: {self.pause_reason}")
+        logging.getLogger(__name__).warning("Captura pausada: %s", self.pause_reason)
         return {
             "paused": True,
             "reason": self.pause_reason,
             "queued": len(self.memory_queue),
         }
 
+    # RF-05 — Reanuda la ingesta, procesa pendientes y devuelve el estado del lote.
     def resume_capture(self):
-        """Resume ingestion and safely process files observed while paused."""
+        """Reanuda la ingesta y procesa de forma segura los archivos detectados durante la pausa."""
         if not self._capture_storage_active:
             raise RuntimeError("No existe una sesión de captura activa para reanudar.")
 
@@ -158,7 +180,10 @@ class ScannerManager:
                 self.memory_queue.extend(queued_paths[index + 1:])
                 break
 
-        print(f"[RF-05] Captura reanudada. Archivos recuperados: {processed}")
+        logging.getLogger(__name__).info(
+            "Captura reanudada; archivos recuperados: %s",
+            processed,
+        )
         return {
             "paused": self.is_paused,
             "processed": processed,
@@ -166,6 +191,7 @@ class ScannerManager:
             "reason": self.pause_reason,
         }
 
+    # RF-04 — Crea una sesión aislada y activa el almacenamiento temporal cifrado.
     def _begin_secure_capture_storage(self):
         """Crea un directorio aislado y activa una clave AES-256 para la sesión de captura."""
         if self._capture_storage_active and self._session_temp_dir:
@@ -181,7 +207,14 @@ class ScannerManager:
         try:
             SecureFileWriter.begin_session(secure_session_id)
         except Exception:
-            shutil.rmtree(session_temp_dir, ignore_errors=True)
+            try:
+                shutil.rmtree(session_temp_dir)
+            except OSError:
+                logging.getLogger(__name__).warning(
+                    "No se pudo retirar el temporal de una sesión fallida %s.",
+                    session_temp_dir,
+                    exc_info=True,
+                )
             raise
 
         self._secure_session_id = secure_session_id
@@ -189,6 +222,7 @@ class ScannerManager:
         self._capture_storage_active = True
         return session_temp_dir
 
+    # RF-04 — Falla temprano si no hay un directorio cifrado de captura activo.
     def _require_session_temp_dir(self):
         if not self._capture_storage_active or not self._session_temp_dir:
             raise RuntimeError(
@@ -201,22 +235,28 @@ class ScannerManager:
         destination = os.path.join(session_temp_dir, os.path.basename(source_name))
         return self._prevent_collision(destination)
 
+    # RF-04 — Persiste el archivo fuente cifrado dentro de la sesión activa.
     def _secure_source_file(self, source_path):
         destination = self._secure_destination(source_path)
         SecureFileWriter.write_secure(source_path, destination)
         return destination
 
+    # RF-04/RF-05 — Encola durante pausas o procesa el archivo detectado.
     def _on_new_file(self, file_path):
         """Procesa un documento detectado por el watcher."""
         if self.is_paused:
             self.memory_queue.append(file_path)
-            print(f"[SCANNER] En memoria (pausado): {os.path.basename(file_path)}")
+            logging.getLogger(__name__).debug(
+                "Archivo en cola durante la pausa: %s",
+                os.path.basename(file_path),
+            )
             return
 
         self._process_file_internal(file_path, remove_source=True)
 
+    # RF-04/RF-05 — Cifra el origen y pausa/reencola si el procesamiento falla.
     def _process_file_internal(self, file_path, remove_source=False):
-        print(f"[SCANNER] New file detected: {os.path.basename(file_path)}")
+        logging.getLogger(__name__).debug("Nuevo archivo detectado: %s", os.path.basename(file_path))
 
         try:
             encrypted_path = self._secure_source_file(file_path)
@@ -224,17 +264,21 @@ class ScannerManager:
                 try:
                     os.remove(file_path)
                 except OSError as error:
-                    print(f"[RF-04] No se pudo retirar el original de la carpeta vigilada: {error}")
+                    logging.getLogger(__name__).warning(
+                        "No se pudo retirar el original de la carpeta vigilada: %s",
+                        error,
+                    )
             if self.on_file_callback:
                 self.on_file_callback(encrypted_path)
             return encrypted_path
         except Exception as error:
-            print(f"[SCANNER] Failed to encrypt captured file: {error}")
+            logging.getLogger(__name__).exception("Falló el cifrado del archivo capturado.")
             self.pause_capture(error)
             if file_path not in self.memory_queue:
                 self.memory_queue.append(file_path)
             return None
 
+    # RF-04 — Importa fuentes, cifra las válidas y devuelve las rutas cifradas.
     def import_files(self, file_paths):
         """Importa archivos existentes y retorna únicamente las rutas cifradas de la sesión."""
         self._require_session_temp_dir()
@@ -242,18 +286,28 @@ class ScannerManager:
 
         for source_path in file_paths:
             if not os.path.exists(source_path):
-                print(f"[SCANNER] Archivo de importación inexistente: {source_path}")
+                logging.getLogger(__name__).warning(
+                    "No existe el archivo de importación: %s",
+                    source_path,
+                )
                 continue
 
             try:
                 encrypted_path = self._secure_source_file(source_path)
                 imported_paths.append(encrypted_path)
-                print(f"[SCANNER] Imported/Encrypted: {os.path.basename(encrypted_path)}")
+                logging.getLogger(__name__).info(
+                    "Archivo importado y cifrado: %s",
+                    os.path.basename(encrypted_path),
+                )
             except Exception as error:
-                print(f"[SCANNER] Import failed for {source_path}: {error}")
+                logging.getLogger(__name__).exception(
+                    "Falló la importación del archivo %s.",
+                    source_path,
+                )
 
         return imported_paths
 
+    # RF-04 — Devuelve los escáneres disponibles; registra fallos del controlador.
     def get_scanners(self):
         """Obtiene la lista de escáneres disponibles (SANE en Linux, WIA en Windows)."""
         scanners = []
@@ -265,7 +319,7 @@ class ScannerManager:
                     capture_output=True,
                     text=True,
                 )
-                if result.returncode == 0:
+                if result.returncode == PROCESS_SUCCESS_RETURN_CODE:
                     for line in result.stdout.strip().split("\n"):
                         if "|" in line:
                             device_id, device_name = line.split("|", 1)
@@ -280,23 +334,24 @@ class ScannerManager:
                 import win32com.client
 
                 device_manager = win32com.client.Dispatch("WIA.DeviceManager")
-                for index in range(1, device_manager.DeviceInfos.Count + 1):
+                for index in range(FIRST_DEVICE_INDEX, device_manager.DeviceInfos.Count + 1):
                     info = device_manager.DeviceInfos(index)
-                    if info.Type != 1:
+                    if info.Type != SCANNER_DEVICE_TYPE:
                         continue
 
                     device_name = f"Escáner {index}"
-                    for property_index in range(1, info.Properties.Count + 1):
+                    for property_index in range(FIRST_DEVICE_INDEX, info.Properties.Count + 1):
                         if info.Properties(property_index).Name == "Name":
                             device_name = info.Properties(property_index).Value
                             break
 
                     scanners.append({"id": info.DeviceID, "name": device_name})
-        except Exception as error:
-            print(f"[SCANNER] Error listando escáneres: {error}")
+        except Exception:
+            logging.getLogger(__name__).exception("No se pudieron listar los escáneres disponibles.")
 
         return scanners
 
+    # RF-04 — Escanea en memoria, cifra el PDF y devuelve su ruta en la sesión.
     def scan_physical_document(self, device_id=None):
         """Captura un folio y lo cifra sin crear una imagen/PDF temporal en texto claro."""
         self._require_session_temp_dir()
@@ -307,7 +362,7 @@ class ScannerManager:
 
         from PIL import Image
 
-        base_name = f"scan_{uuid.uuid4().hex[:8]}"
+        base_name = f"scan_{uuid.uuid4().hex[:SCAN_FILENAME_ID_LENGTH]}"
         scan_filename = f"{base_name}.pdf"
         scan_path = self._secure_destination(scan_filename)
 
@@ -321,17 +376,17 @@ class ScannerManager:
                 rgb_image.save(pdf_buffer, "PDF")
 
             SecureFileWriter.write_secure_bytes(pdf_buffer.getvalue(), scan_path)
-            print(
-                "[SCANNER] Escaneo convertido en memoria y almacenado cifrado: "
-                f"{os.path.basename(scan_path)}"
+            logging.getLogger(__name__).info(
+                "Escaneo convertido en memoria y almacenado cifrado: %s",
+                os.path.basename(scan_path),
             )
             return scan_path
 
         try:
             if sys.platform.startswith("linux"):
-                print(
-                    "[SCANNER] Iniciando escaneo nativo en Linux "
-                    f"(Dispositivo: {device_id or 'Auto'})..."
+                logging.getLogger(__name__).info(
+                    "Iniciando escaneo nativo en Linux (dispositivo: %s).",
+                    device_id or "Auto",
                 )
                 command = [
                     "scanimage",
@@ -342,46 +397,52 @@ class ScannerManager:
                     command.extend(["-d", device_id])
 
                 result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                if result.returncode == 0 and result.stdout:
+                if result.returncode == PROCESS_SUCCESS_RETURN_CODE and result.stdout:
                     return secure_image_bytes_as_pdf(result.stdout)
 
                 first_error = result.stderr.decode("utf-8", errors="replace").strip()
-                print(f"[SCANNER] scanimage falló (intento 1): {first_error}. Reintentando...")
-                time.sleep(2)
+                logging.getLogger(__name__).warning(
+                    "Falló el primer intento scanimage: %s; se reintentará.",
+                    first_error,
+                )
+                time.sleep(SCANNER_RETRY_DELAY_SECONDS)
 
                 result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                if result.returncode == 0 and result.stdout:
+                if result.returncode == PROCESS_SUCCESS_RETURN_CODE and result.stdout:
                     return secure_image_bytes_as_pdf(result.stdout)
 
                 second_error = result.stderr.decode("utf-8", errors="replace").strip()
                 raise RuntimeError(f"SANE Error: {second_error or first_error}")
 
             if sys.platform == "win32":
-                print("[SCANNER] Iniciando escaneo nativo en Windows (WIA)...")
+                logging.getLogger(__name__).info("Iniciando escaneo nativo en Windows (WIA).")
                 import win32com.client
 
                 if device_id:
                     device_manager = win32com.client.Dispatch("WIA.DeviceManager")
                     target_info = None
-                    for index in range(1, device_manager.DeviceInfos.Count + 1):
+                    for index in range(FIRST_DEVICE_INDEX, device_manager.DeviceInfos.Count + 1):
                         if device_manager.DeviceInfos(index).DeviceID == device_id:
                             target_info = device_manager.DeviceInfos(index)
                             break
 
                     if not target_info:
-                        print(f"[SCANNER] No se encontró el dispositivo {device_id}")
+                        logging.getLogger(__name__).warning(
+                            "No se encontró el dispositivo de escaneo %s.",
+                            device_id,
+                        )
                         return None
 
                     wia_device = target_info.Connect()
-                    item = wia_device.Items(1)
-                    image = item.Transfer("{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}")
+                    item = wia_device.Items(FIRST_WIA_ITEM_INDEX)
+                    image = item.Transfer(SCAN_IMAGE_FORMAT_ID)
                 else:
                     common_dialog = win32com.client.Dispatch("WIA.CommonDialog")
                     image = common_dialog.ShowAcquireImage(
-                        1,
-                        4,
-                        1,
-                        "{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}",
+                        SCANNER_DEVICE_TYPE,
+                        WIA_FILE_FORMAT_PDF,
+                        WIA_COLOR_MODE,
+                        SCAN_IMAGE_FORMAT_ID,
                         False,
                         True,
                         False,
@@ -392,13 +453,17 @@ class ScannerManager:
                     return secure_image_bytes_as_pdf(raw_image_bytes)
                 return None
 
-            print(f"[SCANNER] OS no soportado para escaneo nativo: {sys.platform}")
+            logging.getLogger(__name__).warning(
+                "Sistema operativo no compatible con escaneo nativo: %s",
+                sys.platform,
+            )
             return None
         except Exception as error:
-            print(f"[SCANNER] Excepción durante el escaneo: {error}")
+            logging.getLogger(__name__).exception("Falló el escaneo físico.")
             self.pause_capture(error)
             return None
 
+    # RF-04 — Devuelve los archivos cifrados de la sesión de captura activa.
     def get_temp_files(self):
         """Lista los folios cifrados pertenecientes a la sesión de captura actual."""
         files = []
@@ -424,6 +489,7 @@ class ScannerManager:
 
         return files
 
+    # RF-04 — Limpia temporales cifrados y restablece el estado de la sesión.
     def clear_temp(self):
         """Elimina los directorios temporales cifrados después del procesamiento del lote."""
         if os.path.exists(TEMP_ROOT_DIR):
@@ -435,7 +501,11 @@ class ScannerManager:
                     else:
                         os.remove(entry_path)
                 except OSError as error:
-                    print(f"[RF-04] No se pudo limpiar {entry_path}: {error}")
+                    logging.getLogger(__name__).warning(
+                        "No se pudo limpiar el temporal %s: %s",
+                        entry_path,
+                        error,
+                    )
 
         SecureFileWriter.deactivate_session(self._secure_session_id)
         self._capture_storage_active = False
@@ -445,13 +515,14 @@ class ScannerManager:
         self.pause_reason = None
         self.memory_queue = []
 
+    # RF-14 — Evita colisiones de folios cifrados con una variante disponible.
     def _prevent_collision(self, path):
         """Evita colisiones de nombres dentro del directorio cifrado."""
         if not os.path.exists(path):
             return path
 
         base, extension = os.path.splitext(path)
-        version = 2
+        version = FIRST_COLLISION_VERSION
         while os.path.exists(f"{base}_v{version}{extension}"):
             version += 1
         return f"{base}_v{version}{extension}"

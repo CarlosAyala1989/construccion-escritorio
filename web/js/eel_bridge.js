@@ -3,7 +3,7 @@
  * Python emite eventos, JS los recibe y actualiza la UI.
  */
 
-// Called when a new file is detected in the watch folder
+// Se ejecuta cuando se detecta un archivo nuevo en la carpeta vigilada.
 eel.expose(onFileDetected);
 function onFileDetected(data) {
     console.log('[BRIDGE] File detected:', data.name);
@@ -11,14 +11,14 @@ function onFileDetected(data) {
     updateDocCount();
 }
 
-// Called when a document finishes processing
+// Se ejecuta cuando termina el procesamiento de un documento.
 eel.expose(onDocumentProcessed);
 function onDocumentProcessed(data) {
     console.log('[BRIDGE] Document processed:', data.name, 'Encryption:', data.encryption);
-    // Could show a toast notification here
+    // Aquí se podría mostrar una notificación emergente.
 }
 
-// Called during batch processing to update progress
+// Se ejecuta durante el procesamiento por lotes para actualizar el progreso.
 eel.expose(onProcessingProgress);
 function onProcessingProgress(data) {
     const fill = document.getElementById('progressFill');

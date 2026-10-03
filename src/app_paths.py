@@ -1,9 +1,9 @@
 """
-Shared filesystem paths for development and packaged builds.
+Rutas compartidas del sistema de archivos para desarrollo y versiones empaquetadas.
 
-PyInstaller extracts bundled files to a temporary directory at runtime. Runtime
-state such as SQLite, queues, scans, and processed files must live in a stable
-user-writable location instead.
+PyInstaller extrae los archivos incluidos a un directorio temporal durante la ejecución.
+Los datos como SQLite, las colas, los escaneos y los archivos procesados deben guardarse
+en una ubicación estable donde el usuario pueda escribir.
 """
 
 import os

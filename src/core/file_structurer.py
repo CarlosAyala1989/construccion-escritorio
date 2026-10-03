@@ -1,3 +1,5 @@
+# RF-07
+
 import os
 import re
 
@@ -21,7 +23,7 @@ class FileStructurer:
         if not nomenclature_data:
             return None
 
-        # Clean values
+        # Limpia los valores.
         clean_values = [
             FileStructurer._clean_path_value(value)
             for value in nomenclature_data.values()
@@ -31,24 +33,24 @@ class FileStructurer:
         if not clean_values:
             return None
 
-        # Build folder hierarchy using all but the last field
+        # Construye la jerarquía de carpetas con todos los campos menos el último.
         if len(clean_values) > 1:
             folder_hierarchy = clean_values[:-1]
             folder_path = os.path.join(base_output_dir, *folder_hierarchy)
         else:
             folder_path = base_output_dir
             
-        # Ensure the directory exists
+        # Asegura que exista el directorio.
         os.makedirs(folder_path, exist_ok=True)
         
-        # Generate filename
-        filename = separator.join(clean_values) + ".pdf" # Assuming final output is PDF after crypto/OCR
+        # Genera el nombre del archivo; el procesamiento produce un PDF.
+        filename = separator.join(clean_values) + ".pdf"
         
         return os.path.join(folder_path, filename)
 
     @staticmethod
     def structure_title_hierarchy(hierarchy, base_output_dir):
-        """Create title-derived folders and use only the final segment as filename."""
+        """Crea carpetas a partir del título y usa el último segmento como nombre."""
         if not hierarchy:
             return None
 
