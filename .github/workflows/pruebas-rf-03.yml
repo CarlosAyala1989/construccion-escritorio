@@ -2,11 +2,6 @@ name: "Pruebas automatizadas — RF-03 Bloqueo de interfaz local"
 
 on:
   push:
-    paths:
-      - "src/capture_context.py"
-      - "tests/test_rf03_capture_context.py"
-      - "docs/pruebas/RF-03.md"
-      - ".github/workflows/pruebas-rf-03.yml"
   pull_request:
     paths:
       - "src/capture_context.py"

@@ -2,11 +2,6 @@ name: "Pruebas automatizadas — RF-07 Renombrado y carpetas"
 
 on:
   push:
-    paths:
-      - "src/core/file_structurer.py"
-      - "tests/test_rf07_file_structurer.py"
-      - "docs/pruebas/RF-07.md"
-      - ".github/workflows/pruebas-rf-07.yml"
   pull_request:
     paths:
       - "src/core/file_structurer.py"

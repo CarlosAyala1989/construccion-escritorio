@@ -2,11 +2,6 @@ name: "Pruebas automatizadas — RF-08 Bandeja de pendientes"
 
 on:
   push:
-    paths:
-      - "src/core/pending_tray.py"
-      - "tests/test_rf08_pending_tray.py"
-      - "docs/pruebas/RF-08.md"
-      - ".github/workflows/pruebas-rf-08.yml"
   pull_request:
     paths:
       - "src/core/pending_tray.py"
