@@ -1,0 +1,39 @@
+name: "Pruebas automatizadas — RF-07 Renombrado y carpetas"
+
+on:
+  push:
+    paths:
+      - "src/core/file_structurer.py"
+      - "tests/test_rf07_file_structurer.py"
+      - "docs/pruebas/RF-07.md"
+      - ".github/workflows/pruebas-rf-07.yml"
+  pull_request:
+    paths:
+      - "src/core/file_structurer.py"
+      - "tests/test_rf07_file_structurer.py"
+      - "docs/pruebas/RF-07.md"
+      - ".github/workflows/pruebas-rf-07.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pruebas-rf-07:
+    name: Verificación automatizada RF-07
+    runs-on: ubuntu-latest
+    steps:
+      - name: Obtener el código
+        uses: actions/checkout@v4
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Ejecutar pruebas RF-07
+        run: python -m unittest discover -s tests -p 'test_rf07*.py' -v
+      - name: Registrar resultado en el resumen
+        if: always()
+        run: |
+          echo "### RF-07 — Renombrado y estructuración de carpetas" >> "$GITHUB_STEP_SUMMARY"
+          echo "Categorías: unitaria, integración, funcional, rendimiento/estrés y aceptación automatizada." >> "$GITHUB_STEP_SUMMARY"
+          echo "Resultado del trabajo: **${{ job.status }}**" >> "$GITHUB_STEP_SUMMARY"
