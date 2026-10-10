@@ -16,6 +16,13 @@ build/
 *.egg-info/
 # Nota: build.spec sí debe subirse, pero las carpetas build/ y dist/ no.
 
+# Las pruebas automatizadas y sus informes son parte del repositorio.
+!docs/
+!docs/pruebas/
+!docs/pruebas/*.md
+!tests/
+!tests/test_rf*.py
+
 # Almacenamiento Dinámico y Bases de Datos Locales
 # Según la arquitectura, la carpeta data debe ser ignorada.
 data/
