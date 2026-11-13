@@ -1,3 +1,4 @@
+# Pruebas automatizadas de cloud uploader hierarchy.
 import hashlib
 import os
 import tempfile
@@ -16,13 +17,16 @@ HIERARCHY = [
 ]
 
 
+# Agrupa el comportamiento de nube cargador jerarquía tests y el estado de sus operaciones.
 class CloudUploaderHierarchyTests(unittest.TestCase):
+    # Crea procesado archivo según las reglas del componente.
     def _create_processed_file(self, root):
         file_path = Path(root, *HIERARCHY, "USE-SECCOMUL.pdf")
         file_path.parent.mkdir(parents=True)
         file_path.write_bytes(b"%PDF-test")
         return file_path
 
+    # Comprueba local carga preserves procesado jerarquía mediante una prueba de regresión.
     def test_local_upload_preserves_processed_hierarchy(self):
         with tempfile.TemporaryDirectory() as processed_dir:
             with tempfile.TemporaryDirectory() as destination:
@@ -49,6 +53,7 @@ class CloudUploaderHierarchyTests(unittest.TestCase):
                 self.assertEqual(expected, Path(result["destination"]))
                 self.assertTrue(expected.is_file())
 
+    # Comprueba Drive carga uses leaf carpeta as parent mediante una prueba de regresión.
     def test_drive_upload_uses_leaf_folder_as_parent(self):
         with tempfile.TemporaryDirectory() as processed_dir:
             file_path = self._create_processed_file(processed_dir)

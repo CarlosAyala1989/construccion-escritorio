@@ -1,3 +1,4 @@
+# Pruebas automatizadas de informe riesgo nomenclature.
 import os
 import tempfile
 import unittest
@@ -16,7 +17,9 @@ EXPECTED_HIERARCHY = [
 ]
 
 
+# Agrupa el comportamiento de informe riesgo nomenclatura tests y el estado de sus operaciones.
 class InformeRiesgoNomenclatureTests(unittest.TestCase):
+    # Comprueba extracts wrapped title jerarquía mediante una prueba de regresión.
     def test_extracts_wrapped_title_hierarchy(self):
         text = (
             "INFORME DE RIESGO N° 001-2022-XIV-MACREPOL-TACNA/REGPOLTAC\n"
@@ -28,6 +31,7 @@ class InformeRiesgoNomenclatureTests(unittest.TestCase):
             OCREngine().extract_title_hierarchy(text),
         )
 
+    # Comprueba creates carpetas and uses last segment as filename mediante una prueba de regresión.
     def test_creates_folders_and_uses_last_segment_as_filename(self):
         with tempfile.TemporaryDirectory() as output_dir:
             output_path = FileStructurer.structure_title_hierarchy(
@@ -49,11 +53,13 @@ class InformeRiesgoNomenclatureTests(unittest.TestCase):
             self.assertTrue(Path(output_path).parent.is_dir())
 
 
+# Agrupa el comportamiento de informe riesgo real documento integration test y el estado de sus operaciones.
 class InformeRiesgoRealDocumentIntegrationTest(unittest.TestCase):
     @unittest.skipUnless(
         os.getenv("INFORME_RIESGO_TEST_PDF"),
         "Set INFORME_RIESGO_TEST_PDF to run the real document test.",
     )
+    # Comprueba real PDF produces expected jerarquía mediante una prueba de regresión.
     def test_real_pdf_produces_expected_hierarchy(self):
         engine = OCREngine()
         text = engine.extract_text_from_pdf(

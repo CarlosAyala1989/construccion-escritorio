@@ -247,6 +247,7 @@ class CloudUploader:
             )
         return folder_id
 
+    # Escapa Drive query value según las reglas del componente.
     @staticmethod
     def _escape_drive_query_value(value):
         return str(value).replace("\\", "\\\\").replace("'", "\\'")

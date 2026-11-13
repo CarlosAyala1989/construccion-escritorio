@@ -190,6 +190,7 @@ class SecureFileWriter:
         cipher = AES.new(session_key, AES.MODE_GCM, nonce=nonce)
         return cipher.decrypt_and_verify(ciphertext, authentication_tag)
 
+    # Exige active sesión según las reglas del componente.
     @classmethod
     def _require_active_session(cls) -> Tuple[str, bytes]:
         session_id = cls._active_session_id
@@ -204,6 +205,7 @@ class SecureFileWriter:
 
         return session_id, session_key
 
+    # Gestiona sesión key según las reglas del componente.
     @staticmethod
     def _derive_session_key(session_id: str) -> bytes:
         return hmac.new(

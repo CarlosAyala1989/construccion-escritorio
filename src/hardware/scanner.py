@@ -230,6 +230,7 @@ class ScannerManager:
             )
         return self._session_temp_dir
 
+    # Gestiona destino según las reglas del componente.
     def _secure_destination(self, source_name):
         session_temp_dir = self._require_session_temp_dir()
         destination = os.path.join(session_temp_dir, os.path.basename(source_name))
@@ -366,6 +367,7 @@ class ScannerManager:
         scan_filename = f"{base_name}.pdf"
         scan_path = self._secure_destination(scan_filename)
 
+        # Convierte los bytes de imagen en un PDF para su almacenamiento seguro.
         def secure_image_bytes_as_pdf(raw_image_bytes):
             if not raw_image_bytes:
                 raise ValueError("El escáner no devolvió contenido de imagen.")
@@ -527,10 +529,12 @@ class ScannerManager:
             version += 1
         return f"{base}_v{version}{extension}"
 
+    # Gestiona carpeta según las reglas del componente.
     @property
     def watch_folder(self):
         return WATCH_DIR
 
+    # Gestiona carpeta según las reglas del componente.
     @property
     def temp_folder(self):
         return self._session_temp_dir or TEMP_ROOT_DIR
