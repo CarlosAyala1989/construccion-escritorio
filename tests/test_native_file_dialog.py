@@ -1,3 +1,4 @@
+# Pruebas automatizadas de native file dialog.
 import os
 import unittest
 from subprocess import CompletedProcess
@@ -10,6 +11,7 @@ from src.core.native_file_dialog import (
 
 
 class NativeFileDialogTests(unittest.TestCase):
+    # Comprueba el escenario parses windows multiple selección y sus resultados esperados.
     def test_parses_windows_multiple_selection(self):
         raw = "C:\\Documentos\0uno.pdf\0dos.png\0\0"
 
@@ -21,6 +23,7 @@ class NativeFileDialogTests(unittest.TestCase):
             _parse_windows_selection(raw),
         )
 
+    # Comprueba el escenario uses zenity on gtk desktop y sus resultados esperados.
     @patch("src.core.native_file_dialog.subprocess.run")
     @patch("src.core.native_file_dialog.shutil.which")
     def test_uses_zenity_on_gtk_desktop(self, which, run):
@@ -38,6 +41,7 @@ class NativeFileDialogTests(unittest.TestCase):
         self.assertEqual(["/tmp/uno.pdf", "/tmp/dos.png"], selected)
         self.assertEqual("/usr/bin/zenity", run.call_args.args[0][0])
 
+    # Comprueba el escenario uses kdialog on kde desktop y sus resultados esperados.
     @patch("src.core.native_file_dialog.subprocess.run")
     @patch("src.core.native_file_dialog.shutil.which")
     def test_uses_kdialog_on_kde_desktop(self, which, run):

@@ -28,30 +28,36 @@ class DesktopSessionContext:
     workspace: Optional[Dict[str, Any]] = None
     session_id: Optional[str] = None
 
+    # Verifica activa sesión dentro de captura contexto.
     @property
     def has_active_session(self) -> bool:
         return self.session_id is not None
 
+    # Restablece reset dentro de captura contexto.
     def reset(self) -> None:
         self.user = None
         self.workspace = None
         self.session_id = None
 
+    # Establece usuario dentro de captura contexto.
     def set_user(self, user: Dict[str, Any]) -> None:
         self.user = user
         self.workspace = None
         self.session_id = None
 
+    # Establece espacio de trabajo dentro de captura contexto.
     def set_workspace(self, workspace: Dict[str, Any]) -> None:
         if self.has_active_session:
             raise CaptureContextError(WORKSPACE_LOCKED_ERROR)
         self.workspace = workspace
 
+    # Inicia sesión dentro de captura contexto.
     def start_session(self, session_id: str) -> None:
         if self.has_active_session:
             raise CaptureContextError(SESSION_ALREADY_ACTIVE_ERROR)
         self.session_id = session_id
 
+    # Gestiona sesión dentro de captura contexto.
     def end_session(self) -> None:
         self.session_id = None
 

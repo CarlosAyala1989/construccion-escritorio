@@ -1,3 +1,4 @@
+; Instalación y arranque de la aplicación en Windows: preparación de archivos y dependencias.
 Unicode true
 
 !include "LogicLib.nsh"
@@ -47,6 +48,7 @@ Function un.onInit
     continue:
 FunctionEnd
 
+; Define las acciones que ejecuta esta sección del instalador.
 Section "Instalar"
     SetShellVarContext current
 
@@ -87,6 +89,7 @@ Section "Instalar"
     DetailPrint "Instalacion terminada."
 SectionEnd
 
+; Define las acciones que ejecuta esta sección del instalador.
 Section "Uninstall"
     SetShellVarContext current
     Delete "$DESKTOP\Gobernanza Documental.lnk"

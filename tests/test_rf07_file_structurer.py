@@ -9,10 +9,12 @@ from src.core.file_structurer import FileStructurer
 
 
 class FileStructurerRF07Tests(unittest.TestCase):
+    # Comprueba el escenario unitaria limpia caracteres invalidos y valores vacios y sus resultados esperados.
     def test_unitaria_limpia_caracteres_invalidos_y_valores_vacios(self):
         self.assertEqual(FileStructurer._clean_path_value("../Plan:<2026>"), "Plan2026")
         self.assertIsNone(FileStructurer._clean_path_value("... "))
 
+    # Comprueba el escenario integracion crea la jerarquia y no escribe el PDF y sus resultados esperados.
     def test_integracion_crea_la_jerarquia_y_no_escribe_el_pdf(self):
         with tempfile.TemporaryDirectory() as output_dir:
             result = FileStructurer.RenameAndStructure(
@@ -30,6 +32,7 @@ class FileStructurerRF07Tests(unittest.TestCase):
             self.assertTrue(os.path.isdir(os.path.dirname(expected_path)))
             self.assertFalse(os.path.exists(expected_path))
 
+    # Comprueba el escenario funcional construye nombre y carpetas desde metadatos y sus resultados esperados.
     def test_funcional_construye_nombre_y_carpetas_desde_metadatos(self):
         with tempfile.TemporaryDirectory() as output_dir:
             result = FileStructurer.RenameAndStructure(
@@ -43,6 +46,7 @@ class FileStructurerRF07Tests(unittest.TestCase):
                 os.path.join(output_dir, "Gobernanza", "Obras", "Gobernanza-Obras-A-12.pdf"),
             )
 
+    # Comprueba el escenario rendimiento estructura doscientos cincuenta folios y sus resultados esperados.
     def test_rendimiento_estructura_doscientos_cincuenta_folios(self):
         with tempfile.TemporaryDirectory() as output_dir:
             started_at = time.perf_counter()
@@ -61,6 +65,7 @@ class FileStructurerRF07Tests(unittest.TestCase):
             self.assertEqual(len(set(results)), 250)
             self.assertLess(elapsed_seconds, 10)
 
+    # Comprueba el escenario aceptacion impide que metadatos salgan de la carpeta base y sus resultados esperados.
     def test_aceptacion_impide_que_metadatos_salgan_de_la_carpeta_base(self):
         with tempfile.TemporaryDirectory() as output_dir:
             result = FileStructurer.RenameAndStructure(

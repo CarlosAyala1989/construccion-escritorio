@@ -1,3 +1,4 @@
+# Bandeja temporal de archivos pendientes de revisión.
 import logging
 import os
 import shutil

@@ -1,3 +1,4 @@
+# Instalación y arranque de la aplicación en Windows: preparación de archivos y dependencias.
 param(
     [Parameter(Mandatory = $true)]
     [string]$InstallRoot
@@ -21,6 +22,7 @@ foreach ($Dir in @($DataDir, $ToolsDir, $DownloadsDir, $LogDir)) {
 
 $InstallLog = Join-Path $LogDir "install.log"
 
+# Escribe paso durante la preparación del instalador.
 function Write-Step {
     param([string]$Message)
     $Line = "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message
@@ -28,6 +30,7 @@ function Write-Step {
     Add-Content -Path $InstallLog -Value $Line -Encoding UTF8
 }
 
+# Ejecuta descarga durante la preparación del instalador.
 function Invoke-Download {
     param(
         [Parameter(Mandatory = $true)][string]$Url,
@@ -70,6 +73,7 @@ function Invoke-Download {
     Move-Item -Force $TempFile $OutFile
 }
 
+# Comprueba Windows executable durante la preparación del instalador.
 function Test-WindowsExecutable {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -96,6 +100,7 @@ function Test-WindowsExecutable {
     }
 }
 
+# Comprueba Python versión durante la preparación del instalador.
 function Test-PythonVersion {
     param([string]$PythonExe)
     if (-not (Test-Path $PythonExe)) {
@@ -116,6 +121,7 @@ function Test-PythonVersion {
     }
 }
 
+# Obtiene existing Python durante la preparación del instalador.
 function Get-ExistingPython {
     $Launchers = @()
     $PyLauncher = Get-Command py.exe -ErrorAction SilentlyContinue
@@ -142,6 +148,7 @@ function Get-ExistingPython {
     return $null
 }
 
+# Instala private Python durante la preparación del instalador.
 function Install-PrivatePython {
     $PythonDir = Join-Path $ToolsDir "Python312"
     $PythonExe = Join-Path $PythonDir "python.exe"
@@ -178,6 +185,7 @@ function Install-PrivatePython {
     return $PythonExe
 }
 
+# Instala Python requirements durante la preparación del instalador.
 function Install-PythonRequirements {
     param([string]$PythonExe)
 
@@ -209,6 +217,7 @@ function Install-PythonRequirements {
     }
 }
 
+# Obtiene tesseract directorio raíz durante la preparación del instalador.
 function Get-TesseractRoot {
     $Candidates = @(
         (Join-Path $ToolsDir "Tesseract-OCR"),
@@ -251,6 +260,7 @@ function Get-TesseractRoot {
     return $null
 }
 
+# Espera tesseract directorio raíz durante la preparación del instalador.
 function Wait-TesseractRoot {
     param(
         [int]$TimeoutSeconds = 90,
@@ -270,6 +280,7 @@ function Wait-TesseractRoot {
     return $null
 }
 
+# Garantiza tesseract language durante la preparación del instalador.
 function Ensure-TesseractLanguage {
     param([string]$TesseractRoot)
     if (-not $TesseractRoot) {
@@ -292,6 +303,7 @@ function Ensure-TesseractLanguage {
     }
 }
 
+# Instala tesseract durante la preparación del instalador.
 function Install-Tesseract {
     $Existing = Get-TesseractRoot
     if ($Existing) {
@@ -383,6 +395,7 @@ function Install-Tesseract {
     return $Existing
 }
 
+# Obtiene poppler bin durante la preparación del instalador.
 function Get-PopplerBin {
     $Existing = Get-ChildItem -Path $ToolsDir -Filter "pdftoppm.exe" -Recurse -ErrorAction SilentlyContinue |
         Select-Object -First 1
@@ -398,6 +411,7 @@ function Get-PopplerBin {
     return $null
 }
 
+# Instala poppler durante la preparación del instalador.
 function Install-Poppler {
     $Existing = Get-PopplerBin
     if ($Existing) {
@@ -436,6 +450,7 @@ function Install-Poppler {
     return $Bin
 }
 
+# Escribe launcher durante la preparación del instalador.
 function Write-Launcher {
     param(
         [string]$PopplerBin,

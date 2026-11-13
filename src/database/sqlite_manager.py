@@ -35,6 +35,7 @@ TOTP_INTERVAL_SECONDS = 30
 TOTP_VALID_WINDOWS = 1
 
 
+# Interpreta dotenv archivo según las reglas del componente.
 def _parse_dotenv_file(path):
     values = {}
     if not os.path.exists(path):
@@ -64,6 +65,7 @@ def _parse_dotenv_file(path):
     return values
 
 
+# Carga env según las reglas del componente.
 def _load_env():
     env = {}
     for env_path in [
@@ -79,6 +81,7 @@ def _load_env():
     return env
 
 
+# Gestiona int según las reglas del componente.
 def _env_int(value, default):
     try:
         return int(value)
@@ -86,6 +89,7 @@ def _env_int(value, default):
         return default
 
 
+# Gestiona configuración from env según las reglas del componente.
 def _mysql_config_from_env():
     env = _load_env()
     database_url = env.get("DATABASE_URL", "").strip()
@@ -755,6 +759,7 @@ class DatabaseManager:
         conn.commit()
         conn.close()
 
+    # Obtiene cached según las reglas del componente.
     def _get_cached(self, key, default=None):
         conn = self.get_sqlite()
         row = conn.execute("SELECT value FROM cached_config WHERE key = ?", (key,)).fetchone()

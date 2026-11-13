@@ -1,3 +1,4 @@
+; Instalación y arranque de la aplicación en Windows: preparación de archivos y dependencias.
 Unicode true
 
 !ifndef OUT_FILE
@@ -17,6 +18,7 @@ VIAddVersionKey "FileDescription" "Lanzador de Gobernanza Documental"
 VIAddVersionKey "FileVersion" "1.0.0"
 VIAddVersionKey "ProductVersion" "1.0.0"
 
+; Define las acciones que ejecuta esta sección del instalador.
 Section
     Exec '"$SYSDIR\wscript.exe" "$EXEDIR\GobernanzaDocumental.vbs"'
 SectionEnd

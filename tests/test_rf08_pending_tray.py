@@ -9,6 +9,7 @@ from src.core.pending_tray import PendingTray
 
 
 class PendingTrayRF08Tests(unittest.TestCase):
+    # Comprueba el escenario unitaria registra y devuelve fallo si no existe el origen y sus resultados esperados.
     def test_unitaria_registra_y_devuelve_fallo_si_no_existe_el_origen(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             missing_source = os.path.join(temp_dir, "no-existe.pdf")
@@ -20,6 +21,7 @@ class PendingTrayRF08Tests(unittest.TestCase):
             self.assertIsNone(result)
             self.assertTrue(os.path.isdir(pending_dir))
 
+    # Comprueba el escenario integracion mueve el archivo y conserva su contenido y sus resultados esperados.
     def test_integracion_mueve_el_archivo_y_conserva_su_contenido(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             source_path = os.path.join(temp_dir, "origen", "folio.pdf")
@@ -35,6 +37,7 @@ class PendingTrayRF08Tests(unittest.TestCase):
             with open(destination, "rb") as pending_file:
                 self.assertEqual(pending_file.read(), b"contenido protegido")
 
+    # Comprueba el escenario funcional crea la bandeja y devuelve la ruta resultante y sus resultados esperados.
     def test_funcional_crea_la_bandeja_y_devuelve_la_ruta_resultante(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             source_path = os.path.join(temp_dir, "entrada", "lectura-incompleta.pdf")
@@ -49,6 +52,7 @@ class PendingTrayRF08Tests(unittest.TestCase):
             self.assertTrue(os.path.isfile(destination))
             self.assertFalse(os.path.exists(source_path))
 
+    # Comprueba el escenario rendimiento deriva ciento veinte colisiones sin perder archivos y sus resultados esperados.
     def test_rendimiento_deriva_ciento_veinte_colisiones_sin_perder_archivos(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             pending_dir = os.path.join(temp_dir, "pendientes")
@@ -70,6 +74,7 @@ class PendingTrayRF08Tests(unittest.TestCase):
             self.assertTrue(all(os.path.isfile(destination) for destination in destinations))
             self.assertLess(elapsed_seconds, 10)
 
+    # Comprueba el escenario aceptacion conserva el archivo existente y deriva a v2 y sus resultados esperados.
     def test_aceptacion_conserva_el_archivo_existente_y_deriva_a_v2(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             pending_dir = os.path.join(temp_dir, "pendientes")

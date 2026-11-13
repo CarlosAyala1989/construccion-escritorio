@@ -1,3 +1,4 @@
+# Motor OCR: extracción de texto y tratamiento de PDF e imágenes.
 import logging
 import os
 import re

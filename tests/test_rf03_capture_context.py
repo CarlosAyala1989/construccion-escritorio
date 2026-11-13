@@ -21,18 +21,21 @@ class WorkspaceDatabaseStub:
         self.workspaces = workspaces
         self.calls = 0
 
+    # Gestiona get usuario espacios de trabajo como apoyo a las pruebas.
     def get_user_workspaces(self, user_id):
         self.calls += 1
         return list(self.workspaces)
 
 
 class CaptureContextRF03Tests(unittest.TestCase):
+    # Comprueba el escenario unitaria bloquea la captura sin sesion y sus resultados esperados.
     def test_unitaria_bloquea_la_captura_sin_sesion(self):
         context = DesktopSessionContext(user={"id": "operador-1"})
 
         with self.assertRaisesRegex(CaptureContextError, SESSION_REQUIRED_ERROR):
             require_active_capture_context(None, context)
 
+    # Comprueba el escenario integracion valida y actualiza el espacio asignado y sus resultados esperados.
     def test_integracion_valida_y_actualiza_el_espacio_asignado(self):
         assigned_workspace = {"id": "espacio-1", "name": "Obras 2026"}
         database = WorkspaceDatabaseStub([assigned_workspace])
@@ -47,6 +50,7 @@ class CaptureContextRF03Tests(unittest.TestCase):
         self.assertIs(context.workspace, assigned_workspace)
         self.assertEqual(database.calls, 1)
 
+    # Comprueba el escenario funcional habilita la captura con un espacio valido y sus resultados esperados.
     def test_funcional_habilita_la_captura_con_un_espacio_valido(self):
         workspace = {"id": "espacio-1", "name": "Obras 2026"}
         database = WorkspaceDatabaseStub([workspace])
@@ -62,6 +66,7 @@ class CaptureContextRF03Tests(unittest.TestCase):
         self.assertEqual(selected_workspace["id"], "espacio-1")
         self.assertEqual(session_id, "captura-1")
 
+    # Comprueba el escenario rendimiento valida mil ciclos sin bloqueos y sus resultados esperados.
     def test_rendimiento_valida_mil_ciclos_sin_bloqueos(self):
         workspace = {"id": "espacio-1", "name": "Obras 2026"}
         database = WorkspaceDatabaseStub([workspace])
@@ -80,6 +85,7 @@ class CaptureContextRF03Tests(unittest.TestCase):
         self.assertEqual(database.calls, 1000)
         self.assertLess(elapsed_seconds, 5)
 
+    # Comprueba el escenario aceptacion revoca el espacio y vuelve a bloquear y sus resultados esperados.
     def test_aceptacion_revoca_el_espacio_y_vuelve_a_bloquear(self):
         workspace = {"id": "espacio-1", "name": "Obras 2026"}
         database = WorkspaceDatabaseStub([workspace])

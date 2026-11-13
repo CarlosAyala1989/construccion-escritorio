@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Script auxiliar para generar o preparar el instalador de Windows.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
