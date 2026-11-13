@@ -93,6 +93,7 @@ def _select_files_windows():
     raise OSError(error_code, "Windows no pudo abrir el selector de archivos")
 
 
+# Interpreta windows selection dentro de native archivo dialog.
 def _parse_windows_selection(raw_selection):
     parts = [part for part in raw_selection.split("\0") if part]
     if len(parts) <= 1:

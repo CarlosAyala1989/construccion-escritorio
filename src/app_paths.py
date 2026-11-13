@@ -12,16 +12,19 @@ import sys
 APP_NAME = "GobernanzaDocumental"
 
 
+# Comprueba frozen dentro de app paths.
 def is_frozen():
     return getattr(sys, "frozen", False)
 
 
+# Gestiona dir dentro de app paths.
 def resource_dir():
     if is_frozen():
         return getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+# Gestiona datos dir dentro de app paths.
 def user_data_dir():
     configured = os.getenv("GOBERNANZA_DATA_DIR")
     if configured:
@@ -49,6 +52,7 @@ PENDING_REVIEW_DIR = os.path.join(DATA_DIR, "pending_review")
 CLOUD_OUTPUT_DIR = os.path.join(DATA_DIR, "cloud_output")
 
 
+# Garantiza runtime dirs dentro de app paths.
 def ensure_runtime_dirs():
     for path in [
         DATA_DIR,
