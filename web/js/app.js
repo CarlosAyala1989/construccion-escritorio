@@ -183,6 +183,7 @@ async function handleStartSession() {
     }
 }
 
+/** Gestiona end sesión desde la interfaz, coordinando sus resultados visibles. */
 async function handleEndSession() {
     if (!confirm('¿Cerrar la sesión? Se procesarán y subirán todos los documentos pendientes.')) return;
 
@@ -276,10 +277,12 @@ async function openScannerModal() {
     }
 }
 
+/** Cierra escáner diálogo desde la interfaz, coordinando sus resultados visibles. */
 function closeScannerModal() {
     document.getElementById('scannerModal').classList.add('hidden');
 }
 
+/** Gestiona escaneo desde la interfaz, coordinando sus resultados visibles. */
 async function executeScan() {
     closeScannerModal();
     
@@ -344,6 +347,7 @@ function updateCapturePauseState(paused, reason) {
     if (scanButton) scanButton.disabled = capturePaused;
 }
 
+/** Gestiona export archivos desde la interfaz, coordinando sus resultados visibles. */
 async function handleExportFiles() {
     try {
         const result = await eel.export_files()();
@@ -431,6 +435,7 @@ async function refreshPendingReview() {
     } catch (e) { /* Ignora el error de actualización. */ }
 }
 
+/** Actualiza queue desde la interfaz, coordinando sus resultados visibles. */
 async function refreshQueue() {
     try {
         const items = await eel.get_queue_items()();
@@ -474,6 +479,7 @@ function updateDocCount(count) {
     }
 }
 
+/** Formatea size desde la interfaz, coordinando sus resultados visibles. */
 function formatSize(bytes) {
     if (!bytes) return '0 B';
     const units = ['B', 'KB', 'MB', 'GB'];
@@ -486,6 +492,7 @@ function openCorrection(id, name, error) {
     window.open(`correction.html?id=${id}&name=${encodeURIComponent(name)}&error=${encodeURIComponent(error)}`, '_blank', 'width=650,height=450');
 }
 
+/** Restablece to panel desde la interfaz, coordinando sus resultados visibles. */
 function resetToDashboard() {
     document.getElementById('panelResults').classList.add('hidden');
     document.getElementById('panelWorkspaces').classList.remove('hidden');

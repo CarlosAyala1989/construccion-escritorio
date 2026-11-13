@@ -1,3 +1,4 @@
+# Pruebas automatizadas de secreto rojo watermark.
 import os
 import unittest
 
@@ -9,6 +10,7 @@ class SecretoRojoWatermarkIntegrationTest(unittest.TestCase):
         os.getenv("SECRETO_ROJO_TEST_PDF"),
         "Set SECRETO_ROJO_TEST_PDF to run the red watermark test.",
     )
+    # Comprueba el escenario real scanned documento detects roja diagonal marca de agua y sus resultados esperados.
     def test_real_scanned_document_detects_red_diagonal_watermark(self):
         engine = OCREngine()
         policy = {

@@ -1,3 +1,4 @@
+# Pruebas automatizadas de secreto watermark.
 import os
 import unittest
 
@@ -9,6 +10,7 @@ class SecretoWatermarkIntegrationTest(unittest.TestCase):
         os.getenv("SECRETO_TEST_PDF"),
         "Set SECRETO_TEST_PDF to run the real document integration test.",
     )
+    # Comprueba el escenario real scanned documento detects diagonal SECRETO marca de agua y sus resultados esperados.
     def test_real_scanned_document_detects_diagonal_secreto_watermark(self):
         pdf_path = os.environ["SECRETO_TEST_PDF"]
         engine = OCREngine()

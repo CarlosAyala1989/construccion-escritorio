@@ -5,6 +5,7 @@
 
 // Se ejecuta cuando se detecta un archivo nuevo en la carpeta vigilada.
 eel.expose(onFileDetected);
+/** Gestiona archivo detected desde la interfaz, coordinando sus resultados visibles. */
 function onFileDetected(data) {
     console.log('[BRIDGE] File detected:', data.name);
     refreshSessionFiles();
@@ -13,6 +14,7 @@ function onFileDetected(data) {
 
 // Se ejecuta cuando termina el procesamiento de un documento.
 eel.expose(onDocumentProcessed);
+/** Gestiona documento processed desde la interfaz, coordinando sus resultados visibles. */
 function onDocumentProcessed(data) {
     console.log('[BRIDGE] Document processed:', data.name, 'Encryption:', data.encryption);
     // Aquí se podría mostrar una notificación emergente.
@@ -20,6 +22,7 @@ function onDocumentProcessed(data) {
 
 // Se ejecuta durante el procesamiento por lotes para actualizar el progreso.
 eel.expose(onProcessingProgress);
+/** Gestiona processing progreso desde la interfaz, coordinando sus resultados visibles. */
 function onProcessingProgress(data) {
     const fill = document.getElementById('progressFill');
     const text = document.getElementById('progressText');
