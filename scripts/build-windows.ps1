@@ -1,3 +1,4 @@
+# Script auxiliar para generar o preparar el instalador de Windows.
 $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")

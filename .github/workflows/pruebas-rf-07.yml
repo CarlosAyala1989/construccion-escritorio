@@ -1,3 +1,4 @@
+# Flujo de CI para pruebas rf 07 yml; ejecuta sus verificaciones automáticas.
 name: "Pruebas automatizadas — RF-07 Renombrado y carpetas"
 
 on:

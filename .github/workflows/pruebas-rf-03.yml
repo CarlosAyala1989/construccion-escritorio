@@ -1,3 +1,4 @@
+# Flujo de CI para pruebas rf 03 yml; ejecuta sus verificaciones automáticas.
 name: "Pruebas automatizadas — RF-03 Bloqueo de interfaz local"
 
 on:

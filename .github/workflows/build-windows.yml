@@ -1,3 +1,4 @@
+# Flujo de CI para build windows yml; ejecuta sus verificaciones automáticas.
 name: Build Windows Desktop
 
 on:
