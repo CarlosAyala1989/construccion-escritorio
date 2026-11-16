@@ -22,6 +22,8 @@ docs/*
 !docs/pruebas/
 docs/pruebas/*
 !docs/pruebas/*.md
+!docs/refactorizacion-espanol/
+!docs/refactorizacion-espanol/*.md
 !tests/
 tests/*
 !tests/test_rf*.py
