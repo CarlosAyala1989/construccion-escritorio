@@ -1,10 +1,15 @@
 # Inglés residual
 
-El inglés residual se divide en:
+La comparación AST registra 177 definiciones propias retiradas y sustituidas por nombres en español. El porcentaje de conversión de la matriz aprobada es **177/177 (100 %)**. El denominador excluye contratos, nombres impuestos por frameworks y APIs externas.
 
-- Obligatorio: APIs de Python, Eel, JavaScript, navegador, Google Drive, MySQL, PyInstaller y dependencias.
-- Congelado: contratos Eel, claves JSON, tablas/columnas, estados, rutas API y variables de entorno.
-- Técnico aceptado: OCR, PDF, AES-GCM, HTTP, OAuth, SHA-256, WIA, TOTP y nombres de proveedores.
-- Pendiente justificado: métodos internos extensos cuya traducción simultánea aumentaría el riesgo sin cobertura suficiente.
+## Excepciones justificadas
 
-La conversión se calcula sobre los símbolos seleccionados como seguros en el inventario, no sobre palabras reservadas ni contratos. Todos los símbolos enumerados con nombre adoptado en `02-inventario-simbolos.md` fueron propagados. No se presenta un porcentaje global artificial porque el repositorio aún contiene identificadores internos que requieren clasificación individual adicional.
+- **Eel JavaScript → Python:** `login`, `logout`, `get_current_user`, `get_workspaces`, `select_workspace`, `start_session`, `end_session`, `import_files`, `get_scanners`, `scan_document`, `resume_capture`, `pick_and_import_files`, `export_files`, `get_session_files`, `get_pending_review`, `get_queue_items`, `correct_document`, `get_app_status`, `sync_now` y `get_config`.
+- **Callbacks Eel Python → JavaScript:** `onFileDetected`, `onDocumentProcessed` y `onProcessingProgress`, junto con sus claves serializadas.
+- **Adaptadores con nombre contractual:** `AdministradorBaseDatos.get_config`, `AdministradorBaseDatos.get_queue_items`, `ClienteAPISaaS.get_config`, `CargadorNube.upload`, `AdministradorEscaner.import_files`, `get_scanners`, `resume_capture`, `watch_folder` y `temp_folder` reflejan contratos Eel o estructuras consumidas.
+- **Python y unittest:** `__init__`, `__name__`, `setUp`, métodos de aserción y excepciones estándar son obligatorios.
+- **Watchdog y DB-API:** `on_created`, `cursor`, `execute`, `fetchone` y `close` implementan interfaces externas.
+- **Protocolos y bibliotecas:** Eel, MySQL, SQLite, Google Drive, OAuth, HTTP, PDF, OCR, AES-GCM, SHA-256, WIA y TOTP no se traducen.
+- **Persistencia:** tablas, columnas, rutas, variables de entorno, claves JSON y estados como `SUCCESS`, `PENDING` o `DESKTOP_SCANNER` permanecen congelados.
+
+No quedan pendientes genéricos dentro de la matriz aprobada. Los nombres de archivos históricos se conservan para no romper imports, workflows ni empaquetado.

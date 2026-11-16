@@ -12,3 +12,4 @@ Commits de implementación:
 
 - `3df7f61`: contexto y procesamiento documental.
 - `328a901`: servicios internos, contratos Eel y comentarios.
+- `11ae0c8`: segunda pasada de métodos, auxiliares, pruebas y nomenclatura residual.
