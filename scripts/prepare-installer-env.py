@@ -36,7 +36,7 @@ DATABASE_KEYS = {
 
 
 # Interpreta env dentro de prepare installer env.
-def parse_env(path: Path) -> dict[str, str]:
+def analizar_entorno(path: Path) -> dict[str, str]:
     values = {}
     if not path.exists():
         return values
@@ -62,7 +62,7 @@ def parse_env(path: Path) -> dict[str, str]:
 def main() -> int:
     env_values = {}
     for source_file in SOURCE_FILES:
-        env_values.update(parse_env(source_file))
+        env_values.update(analizar_entorno(source_file))
 
     selected = {key: env_values[key] for key in DATABASE_KEYS if env_values.get(key)}
 

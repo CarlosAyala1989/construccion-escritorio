@@ -22,7 +22,7 @@ class SustitutoBaseDatosEspacios:
         self.calls = 0
 
     # Devuelve los espacios asignados sin consultar MySQL.
-    def get_user_workspaces(self, user_id):
+    def obtener_espacios_usuario(self, user_id):
         self.calls += 1
         return list(self.workspaces)
 

@@ -21,7 +21,7 @@ class ClienteAPISaaS:
         self.token = token
 
     # RF-17 — Construye encabezados HTTP sin modificar estado compartido.
-    def _headers(self):
+    def _cabeceras(self):
         headers = {"Content-Type": "application/json"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
@@ -33,7 +33,7 @@ class ClienteAPISaaS:
         try:
             resp = requests.get(
                 f"{self.base_url}/api/sync/config",
-                headers=self._headers(),
+                headers=self._cabeceras(),
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
             if resp.status_code == HTTP_OK:
@@ -43,12 +43,12 @@ class ClienteAPISaaS:
         return None
 
     # RF-17 — Informa una subida y devuelve si el backend la aceptó.
-    def report_upload(self, upload_data):
+    def informar_subida(self, upload_data):
         """Informa al servicio SaaS que la carga de un documento fue exitosa."""
         try:
             resp = requests.post(
                 f"{self.base_url}/api/sync/upload",
-                headers=self._headers(),
+                headers=self._cabeceras(),
                 json=upload_data,
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
@@ -58,12 +58,12 @@ class ClienteAPISaaS:
             return False
 
     # RF-17 — Sincroniza el lote de bitácoras y devuelve el resultado al llamador.
-    def sync_logs(self, logs):
+    def sincronizar_bitacoras(self, logs):
         """Envía un lote de bitácoras de auditoría al servicio SaaS."""
         try:
             resp = requests.post(
                 f"{self.base_url}/api/sync/logs",
-                headers=self._headers(),
+                headers=self._cabeceras(),
                 json={"logs": logs},
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
@@ -73,7 +73,7 @@ class ClienteAPISaaS:
             return False
 
     # RF-17 — Comprueba conectividad con estados HTTP aceptados por la API.
-    def check_connection(self):
+    def comprobar_conexion(self):
         """Comprueba si la API SaaS está disponible."""
         try:
             resp = requests.get(

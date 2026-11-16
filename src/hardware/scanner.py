@@ -12,7 +12,7 @@ import sys
 import time
 import uuid
 
-from src.app_paths import DATA_DIR, TEMP_WORKSPACE_DIR, WATCH_DIR, ensure_runtime_dirs
+from src.app_paths import DATA_DIR, TEMP_WORKSPACE_DIR, WATCH_DIR, asegurar_directorios_ejecucion
 from src.core.secure_file_writer import EscritorArchivoSeguro
 
 try:
@@ -22,7 +22,7 @@ try:
 except ImportError:
     HAS_WATCHDOG = False
 
-ensure_runtime_dirs()
+asegurar_directorios_ejecucion()
 TEMP_ROOT_DIR = TEMP_WORKSPACE_DIR
 SUPPORTED_DOCUMENT_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".bmp"}
 SCAN_RESOLUTION_DPI = 300
@@ -62,7 +62,7 @@ class ManejadorPDF(FileSystemEventHandler):
 
 
 class AdministradorEscaner:
-    """Gestiona ingesta y captura física dentro de un contexto temporal cifrado."""
+    """Coordina la importación y captura física en almacenamiento temporal cifrado."""
 
     def __init__(self, on_file_callback=None):
         self._observer = None
@@ -76,16 +76,16 @@ class AdministradorEscaner:
         self.on_file_callback = on_file_callback
 
     # RF-04 — Inicia la captura cifrada y devuelve si el monitoreo quedó activo.
-    def start_watching(self):
+    def iniciar_vigilancia(self):
         """Inicia la sesión de ingesta y crea su directorio temporal cifrado."""
         if self._running:
             return True
 
-        self._begin_secure_capture_storage()
+        self._iniciar_almacenamiento_captura_segura()
         self.is_paused = False
         self.pause_reason = None
         self.memory_queue = []
-        self._ingest_existing_watch_files()
+        self._incorporar_archivos_vigilados_existentes()
 
         if not HAS_WATCHDOG:
             logging.getLogger(__name__).warning(
@@ -93,7 +93,7 @@ class AdministradorEscaner:
             )
             return False
 
-        handler = ManejadorPDF(self._on_new_file)
+        handler = ManejadorPDF(self._al_recibir_archivo_nuevo)
         self._observer = Observer()
         self._observer.schedule(handler, WATCH_DIR, recursive=False)
         self._observer.daemon = True
@@ -106,7 +106,7 @@ class AdministradorEscaner:
         )
         return True
 
-    def _ingest_existing_watch_files(self):
+    def _incorporar_archivos_vigilados_existentes(self):
         """Recupera archivos compatibles que quedaron en la carpeta vigilada tras una interrupción."""
         for file_name in sorted(os.listdir(WATCH_DIR)):
             file_path = os.path.join(WATCH_DIR, file_name)
@@ -114,11 +114,11 @@ class AdministradorEscaner:
                 continue
             if os.path.splitext(file_name)[1].lower() not in SUPPORTED_DOCUMENT_EXTENSIONS:
                 continue
-            if not self._process_file_internal(file_path, remove_source=True):
+            if not self._procesar_archivo_interno(file_path, remove_source=True):
                 break
 
     # RF-04 — Detiene el watcher y conserva el lote cifrado para su procesamiento.
-    def stop_watching(self):
+    def detener_vigilancia(self):
         """Detiene la captura; conserva los folios cifrados para el procesamiento posterior."""
         if self._observer and self._running:
             self._observer.stop()
@@ -128,11 +128,11 @@ class AdministradorEscaner:
             logging.getLogger(__name__).info("Se detuvo el monitoreo de la carpeta.")
 
         if self._capture_storage_active:
-            EscritorArchivoSeguro.deactivate_session(self._secure_session_id)
+            EscritorArchivoSeguro.desactivar_sesion_segura(self._secure_session_id)
             self._capture_storage_active = False
 
     # RF-05 — Pausa la ingesta sin borrar folios y devuelve su estado al llamador.
-    def pause_capture(self, reason=None):
+    def pausar_captura(self, reason=None):
         """Pausa la ingesta sin eliminar los folios ya capturados y cifrados."""
         self.is_paused = True
         self.pause_reason = str(reason or "Atasco o fallo mecánico del escáner.")
@@ -165,7 +165,7 @@ class AdministradorEscaner:
                     ) == os.path.abspath(WATCH_DIR)
                 except ValueError:
                     remove_source = False
-                encrypted_path = self._process_file_internal(
+                encrypted_path = self._procesar_archivo_interno(
                     file_path,
                     remove_source=remove_source,
                 )
@@ -174,7 +174,7 @@ class AdministradorEscaner:
                     break
                 processed += 1
             except Exception as error:
-                self.pause_capture(error)
+                self.pausar_captura(error)
                 if file_path not in self.memory_queue:
                     self.memory_queue.append(file_path)
                 self.memory_queue.extend(queued_paths[index + 1:])
@@ -192,7 +192,7 @@ class AdministradorEscaner:
         }
 
     # RF-04 — Crea una sesión aislada y activa el almacenamiento temporal cifrado.
-    def _begin_secure_capture_storage(self):
+    def _iniciar_almacenamiento_captura_segura(self):
         """Crea un directorio aislado y activa una clave AES-256 para la sesión de captura."""
         if self._capture_storage_active and self._session_temp_dir:
             return self._session_temp_dir
@@ -205,7 +205,7 @@ class AdministradorEscaner:
 
         os.makedirs(session_temp_dir, mode=0o700, exist_ok=False)
         try:
-            EscritorArchivoSeguro.begin_session(secure_session_id)
+            EscritorArchivoSeguro.iniciar_sesion_segura(secure_session_id)
         except Exception:
             try:
                 shutil.rmtree(session_temp_dir)
@@ -223,27 +223,27 @@ class AdministradorEscaner:
         return session_temp_dir
 
     # RF-04 — Falla temprano si no hay un directorio cifrado de captura activo.
-    def _require_session_temp_dir(self):
+    def _exigir_directorio_temporal_sesion(self):
         if not self._capture_storage_active or not self._session_temp_dir:
             raise RuntimeError(
                 "No existe un directorio temporal cifrado activo. Inicia una sesión de captura primero."
             )
         return self._session_temp_dir
 
-    # Gestiona destino según las reglas del componente.
-    def _secure_destination(self, source_name):
-        session_temp_dir = self._require_session_temp_dir()
+    # Calcula una ruta de destino única dentro de la sesión activa.
+    def _obtener_destino_seguro(self, source_name):
+        session_temp_dir = self._exigir_directorio_temporal_sesion()
         destination = os.path.join(session_temp_dir, os.path.basename(source_name))
-        return self._prevent_collision(destination)
+        return self._evitar_colision(destination)
 
     # RF-04 — Persiste el archivo fuente cifrado dentro de la sesión activa.
-    def _secure_source_file(self, source_path):
-        destination = self._secure_destination(source_path)
-        EscritorArchivoSeguro.write_secure(source_path, destination)
+    def _proteger_archivo_origen(self, source_path):
+        destination = self._obtener_destino_seguro(source_path)
+        EscritorArchivoSeguro.escribir_seguro(source_path, destination)
         return destination
 
     # RF-04/RF-05 — Encola durante pausas o procesa el archivo detectado.
-    def _on_new_file(self, file_path):
+    def _al_recibir_archivo_nuevo(self, file_path):
         """Procesa un documento detectado por el watcher."""
         if self.is_paused:
             self.memory_queue.append(file_path)
@@ -253,14 +253,14 @@ class AdministradorEscaner:
             )
             return
 
-        self._process_file_internal(file_path, remove_source=True)
+        self._procesar_archivo_interno(file_path, remove_source=True)
 
     # RF-04/RF-05 — Cifra el origen y pausa/reencola si el procesamiento falla.
-    def _process_file_internal(self, file_path, remove_source=False):
+    def _procesar_archivo_interno(self, file_path, remove_source=False):
         logging.getLogger(__name__).debug("Nuevo archivo detectado: %s", os.path.basename(file_path))
 
         try:
-            encrypted_path = self._secure_source_file(file_path)
+            encrypted_path = self._proteger_archivo_origen(file_path)
             if remove_source:
                 try:
                     os.remove(file_path)
@@ -274,7 +274,7 @@ class AdministradorEscaner:
             return encrypted_path
         except Exception as error:
             logging.getLogger(__name__).exception("Falló el cifrado del archivo capturado.")
-            self.pause_capture(error)
+            self.pausar_captura(error)
             if file_path not in self.memory_queue:
                 self.memory_queue.append(file_path)
             return None
@@ -282,7 +282,7 @@ class AdministradorEscaner:
     # RF-04 — Importa fuentes, cifra las válidas y devuelve las rutas cifradas.
     def import_files(self, file_paths):
         """Importa archivos existentes y retorna únicamente las rutas cifradas de la sesión."""
-        self._require_session_temp_dir()
+        self._exigir_directorio_temporal_sesion()
         imported_paths = []
 
         for source_path in file_paths:
@@ -294,7 +294,7 @@ class AdministradorEscaner:
                 continue
 
             try:
-                encrypted_path = self._secure_source_file(source_path)
+                encrypted_path = self._proteger_archivo_origen(source_path)
                 imported_paths.append(encrypted_path)
                 logging.getLogger(__name__).info(
                     "Archivo importado y cifrado: %s",
@@ -353,9 +353,9 @@ class AdministradorEscaner:
         return scanners
 
     # RF-04 — Escanea en memoria, cifra el PDF y devuelve su ruta en la sesión.
-    def scan_physical_document(self, device_id=None):
+    def escanear_documento_fisico(self, device_id=None):
         """Captura un folio y lo cifra sin crear una imagen/PDF temporal en texto claro."""
-        self._require_session_temp_dir()
+        self._exigir_directorio_temporal_sesion()
         if self.is_paused:
             raise RuntimeError(
                 "La captura está pausada. Resuelve el atasco o fallo y reanuda la sesión."
@@ -365,10 +365,10 @@ class AdministradorEscaner:
 
         base_name = f"scan_{uuid.uuid4().hex[:SCAN_FILENAME_ID_LENGTH]}"
         scan_filename = f"{base_name}.pdf"
-        scan_path = self._secure_destination(scan_filename)
+        scan_path = self._obtener_destino_seguro(scan_filename)
 
         # Convierte los bytes de imagen en un PDF para su almacenamiento seguro.
-        def secure_image_bytes_as_pdf(raw_image_bytes):
+        def proteger_bytes_imagen_como_pdf(raw_image_bytes):
             if not raw_image_bytes:
                 raise ValueError("El escáner no devolvió contenido de imagen.")
 
@@ -377,7 +377,7 @@ class AdministradorEscaner:
                 pdf_buffer = BytesIO()
                 rgb_image.save(pdf_buffer, "PDF")
 
-            EscritorArchivoSeguro.write_secure_bytes(pdf_buffer.getvalue(), scan_path)
+            EscritorArchivoSeguro.escribir_bytes_seguros(pdf_buffer.getvalue(), scan_path)
             logging.getLogger(__name__).info(
                 "Escaneo convertido en memoria y almacenado cifrado: %s",
                 os.path.basename(scan_path),
@@ -400,7 +400,7 @@ class AdministradorEscaner:
 
                 result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 if result.returncode == PROCESS_SUCCESS_RETURN_CODE and result.stdout:
-                    return secure_image_bytes_as_pdf(result.stdout)
+                    return proteger_bytes_imagen_como_pdf(result.stdout)
 
                 first_error = result.stderr.decode("utf-8", errors="replace").strip()
                 logging.getLogger(__name__).warning(
@@ -411,7 +411,7 @@ class AdministradorEscaner:
 
                 result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 if result.returncode == PROCESS_SUCCESS_RETURN_CODE and result.stdout:
-                    return secure_image_bytes_as_pdf(result.stdout)
+                    return proteger_bytes_imagen_como_pdf(result.stdout)
 
                 second_error = result.stderr.decode("utf-8", errors="replace").strip()
                 raise RuntimeError(f"SANE Error: {second_error or first_error}")
@@ -452,7 +452,7 @@ class AdministradorEscaner:
 
                 if image:
                     raw_image_bytes = bytes(image.FileData.BinaryData)
-                    return secure_image_bytes_as_pdf(raw_image_bytes)
+                    return proteger_bytes_imagen_como_pdf(raw_image_bytes)
                 return None
 
             logging.getLogger(__name__).warning(
@@ -462,11 +462,11 @@ class AdministradorEscaner:
             return None
         except Exception as error:
             logging.getLogger(__name__).exception("Falló el escaneo físico.")
-            self.pause_capture(error)
+            self.pausar_captura(error)
             return None
 
     # RF-04 — Devuelve los archivos cifrados de la sesión de captura activa.
-    def get_temp_files(self):
+    def obtener_archivos_temporales(self):
         """Lista los folios cifrados pertenecientes a la sesión de captura actual."""
         files = []
         session_temp_dir = self._session_temp_dir
@@ -492,7 +492,7 @@ class AdministradorEscaner:
         return files
 
     # RF-04 — Limpia temporales cifrados y restablece el estado de la sesión.
-    def clear_temp(self):
+    def limpiar_temporales(self):
         """Elimina los directorios temporales cifrados después del procesamiento del lote."""
         if os.path.exists(TEMP_ROOT_DIR):
             for entry_name in os.listdir(TEMP_ROOT_DIR):
@@ -509,7 +509,7 @@ class AdministradorEscaner:
                         error,
                     )
 
-        EscritorArchivoSeguro.deactivate_session(self._secure_session_id)
+        EscritorArchivoSeguro.desactivar_sesion_segura(self._secure_session_id)
         self._capture_storage_active = False
         self._secure_session_id = None
         self._session_temp_dir = None
@@ -518,7 +518,7 @@ class AdministradorEscaner:
         self.memory_queue = []
 
     # RF-14 — Evita colisiones de folios cifrados con una variante disponible.
-    def _prevent_collision(self, path):
+    def _evitar_colision(self, path):
         """Evita colisiones de nombres dentro del directorio cifrado."""
         if not os.path.exists(path):
             return path
@@ -529,12 +529,12 @@ class AdministradorEscaner:
             version += 1
         return f"{base}_v{version}{extension}"
 
-    # Gestiona carpeta según las reglas del componente.
+    # Expone la carpeta vigilada utilizada por la interfaz.
     @property
     def watch_folder(self):
         return WATCH_DIR
 
-    # Gestiona carpeta según las reglas del componente.
+    # Expone la carpeta temporal de la sesión activa.
     @property
     def temp_folder(self):
         return self._session_temp_dir or TEMP_ROOT_DIR

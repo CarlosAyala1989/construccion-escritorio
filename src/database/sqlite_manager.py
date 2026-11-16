@@ -17,16 +17,16 @@ from urllib.parse import unquote, urlparse
 import mysql.connector
 import pyotp
 
-from src.app_paths import BASE_DIR, DATA_DIR, ensure_runtime_dirs
+from src.app_paths import BASE_DIR, DATA_DIR, asegurar_directorios_ejecucion
 from src.core.local_crypto import (
-    decrypt_local_payload,
-    encrypt_local_payload,
-    is_encrypted_local_payload,
+    descifrar_contenido_local,
+    cifrar_contenido_local,
+    es_contenido_local_cifrado,
 )
 
 # Rutas locales
 REPO_ROOT = os.path.dirname(BASE_DIR)
-ensure_runtime_dirs()
+asegurar_directorios_ejecucion()
 SQLITE_PATH = os.path.join(DATA_DIR, "local_queue.db")
 DEFAULT_MYSQL_PORT = 3306
 DEFAULT_COMPRESSION_THRESHOLD_MB = 10
@@ -36,7 +36,7 @@ TOTP_VALID_WINDOWS = 1
 
 
 # Interpreta dotenv archivo según las reglas del componente.
-def _parse_dotenv_file(path):
+def _analizar_archivo_entorno(path):
     values = {}
     if not os.path.exists(path):
         return values
@@ -66,7 +66,7 @@ def _parse_dotenv_file(path):
 
 
 # Carga env según las reglas del componente.
-def _load_env():
+def _cargar_entorno():
     env = {}
     for env_path in [
         os.path.join(REPO_ROOT, "construccion-web", ".env"),
@@ -75,23 +75,23 @@ def _load_env():
         os.path.join(BASE_DIR, ".env"),
         os.path.join(DATA_DIR, ".env"),
     ]:
-        env.update(_parse_dotenv_file(env_path))
+        env.update(_analizar_archivo_entorno(env_path))
 
     env.update(os.environ)
     return env
 
 
-# Gestiona int según las reglas del componente.
-def _env_int(value, default):
+# Convierte una variable de entorno a entero o devuelve el valor predeterminado.
+def _entero_entorno(value, default):
     try:
         return int(value)
     except (TypeError, ValueError):
         return default
 
 
-# Gestiona configuración from env según las reglas del componente.
-def _mysql_config_from_env():
-    env = _load_env()
+# Construye la configuración de MySQL a partir de variables de entorno.
+def _configuracion_mysql_desde_entorno():
+    env = _cargar_entorno()
     database_url = env.get("DATABASE_URL", "").strip()
 
     if database_url:
@@ -107,7 +107,7 @@ def _mysql_config_from_env():
 
     return {
         "host": env.get("MYSQL_HOST") or env.get("DB_HOST") or "",
-        "port": _env_int(
+        "port": _entero_entorno(
             env.get("MYSQL_PORT") or env.get("DB_PORT"),
             DEFAULT_MYSQL_PORT,
         ),
@@ -121,7 +121,7 @@ class ErrorAutenticacion(Exception):
     """Fallo de autenticación esperado que puede mostrarse al usuario."""
 
 
-def _verify_totp_code(secret, code):
+def _verificar_codigo_totp(secret, code):
     """Verifica un TOTP de seis dígitos con la misma ventana de 30 segundos que la web."""
     normalized_code = re.sub(r"\s+", "", str(code or ""))
     if not secret or not re.fullmatch(rf"\d{{{TOTP_DIGITS}}}", normalized_code):
@@ -146,14 +146,14 @@ class AdministradorBaseDatos:
 
     # RF-13/RF-17 — Aísla configuración y conexiones al ciclo de vida de esta instancia.
     def __init__(self):
-        ensure_runtime_dirs()
-        self._mysql_config = _mysql_config_from_env()
+        asegurar_directorios_ejecucion()
+        self._mysql_config = _configuracion_mysql_desde_entorno()
         self._mysql_connections = threading.local()
-        self._init_sqlite()
+        self._inicializar_sqlite()
 
     # ─── SQLite (local) ────────────────────────────────
 
-    def _init_sqlite(self):
+    def _inicializar_sqlite(self):
         """Crea tablas SQLite locales para la cola y la caché sin conexión."""
         conn = sqlite3.connect(SQLITE_PATH)
         c = conn.cursor()
@@ -214,13 +214,13 @@ class AdministradorBaseDatos:
             )
         """)
 
-        self._encrypt_legacy_audit_logs(c)
+        self._cifrar_bitacoras_heredadas(c)
 
         conn.commit()
         conn.close()
 
     # RF-16 — Migra registros históricos a sobres autenticados y conserva trazabilidad.
-    def _encrypt_legacy_audit_logs(self, cursor):
+    def _cifrar_bitacoras_heredadas(self, cursor):
         """Migra registros de bitácora legibles antiguos sin cambiar el esquema SQLite."""
         rows = cursor.execute(
             "SELECT * FROM local_audit_log WHERE details IS NULL OR details NOT LIKE ?",
@@ -230,7 +230,7 @@ class AdministradorBaseDatos:
 
         for row in rows:
             values = dict(zip(column_names, row))
-            encrypted_payload = encrypt_local_payload({
+            encrypted_payload = cifrar_contenido_local({
                 "user_id": values.get("user_id"),
                 "user_name": values.get("user_name"),
                 "action": values.get("action"),
@@ -250,7 +250,7 @@ class AdministradorBaseDatos:
                 (encrypted_payload, values["id"]),
             )
 
-    def get_sqlite(self):
+    def obtener_sqlite(self):
         """Abre una conexión nueva a SQLite."""
         conn = sqlite3.connect(SQLITE_PATH)
         conn.row_factory = sqlite3.Row
@@ -259,7 +259,7 @@ class AdministradorBaseDatos:
     # ─── MySQL (remoto) ───────────────────────────────
 
     # RF-13/RF-17 — Reutiliza la conexión por hilo y pasa al modo sin conexión si falla.
-    def get_mysql(self):
+    def obtener_mysql(self):
         """Obtiene la conexión MySQL y vuelve a conectarse si es necesario."""
         required_config = ("host", "user", "database")
         if not all(self._mysql_config.get(key) for key in required_config):
@@ -277,10 +277,10 @@ class AdministradorBaseDatos:
             return None
 
     # RF-13/RF-17 — Devuelve conectividad remota sin ocultar fallos inesperados.
-    def is_online(self):
+    def esta_en_linea(self):
         """Comprueba si se puede acceder a MySQL."""
         try:
-            conn = self.get_mysql()
+            conn = self.obtener_mysql()
             if conn and conn.is_connected():
                 return True
         except mysql.connector.Error as error:
@@ -289,10 +289,10 @@ class AdministradorBaseDatos:
 
     # ─── Autenticación ─────────────────────────────────
 
-    def authenticate_user(self, email, password, totp_code):
+    def autenticar_usuario(self, email, password, totp_code):
         """Autentica a un usuario de escritorio con contraseña y TOTP administrado."""
         import bcrypt
-        conn = self.get_mysql()
+        conn = self.obtener_mysql()
         if not conn:
             raise ConnectionError("No se pudo conectar con la base de datos.")
 
@@ -326,7 +326,7 @@ class AdministradorBaseDatos:
                 "Solicita al administrador activarlo."
             )
 
-        if not _verify_totp_code(user["twoFactorSecret"], totp_code):
+        if not _verificar_codigo_totp(user["twoFactorSecret"], totp_code):
             raise ErrorAutenticacion("Código de Authenticator inválido o vencido.")
 
         return {
@@ -339,12 +339,12 @@ class AdministradorBaseDatos:
     # ─── Espacios de trabajo ───────────────────────────
 
     # RF-03 — Devuelve espacios asignados y usa la caché si MySQL no responde.
-    def get_user_workspaces(self, user_id):
+    def obtener_espacios_usuario(self, user_id):
         """Devuelve los espacios de trabajo asignados a un usuario."""
-        conn = self.get_mysql()
+        conn = self.obtener_mysql()
         if not conn:
             # Recurre a la caché como alternativa.
-            return self._get_cached("workspaces", [])
+            return self._obtener_cache("workspaces", [])
 
         cursor = None
         try:
@@ -360,22 +360,22 @@ class AdministradorBaseDatos:
             workspaces = cursor.fetchall()
         except mysql.connector.Error as error:
             logging.getLogger(__name__).warning("Falló la consulta de espacios; se usará caché: %s", error)
-            return self._get_cached("workspaces", [])
+            return self._obtener_cache("workspaces", [])
         finally:
             if cursor:
                 cursor.close()
 
         # Guarda los datos en caché para usarlos sin conexión.
-        self._set_cached("workspaces", json.dumps(workspaces))
+        self._guardar_cache("workspaces", json.dumps(workspaces))
         return workspaces
 
     # RF-03 — Busca el espacio seleccionado y conserva la alternativa local.
-    def get_workspace(self, workspace_id):
+    def obtener_espacio_trabajo(self, workspace_id):
         """Obtiene un espacio de MySQL o recurre a la última caché válida."""
         if not workspace_id:
             return None
 
-        conn = self.get_mysql()
+        conn = self.obtener_mysql()
         if conn:
             cursor = None
             try:
@@ -396,7 +396,7 @@ class AdministradorBaseDatos:
                 if cursor:
                     cursor.close()
 
-        cached_workspaces = self._get_cached("workspaces", [])
+        cached_workspaces = self._obtener_cache("workspaces", [])
         return next(
             (
                 workspace
@@ -409,11 +409,11 @@ class AdministradorBaseDatos:
     # ─── Políticas de seguridad ────────────────────────
 
     # RF-10 — Recupera reglas de seguridad y conserva la caché sin conexión.
-    def get_security_policies(self):
+    def obtener_politicas_seguridad(self):
         """Devuelve todas las políticas de seguridad de MySQL."""
-        conn = self.get_mysql()
+        conn = self.obtener_mysql()
         if not conn:
-            return self._get_cached("policies", [])
+            return self._obtener_cache("policies", [])
 
         cursor = None
         try:
@@ -426,12 +426,12 @@ class AdministradorBaseDatos:
             policies = cursor.fetchall()
         except mysql.connector.Error as error:
             logging.getLogger(__name__).warning("Falló la consulta de políticas; se usará caché: %s", error)
-            return self._get_cached("policies", [])
+            return self._obtener_cache("policies", [])
         finally:
             if cursor:
                 cursor.close()
 
-        self._set_cached("policies", json.dumps(policies))
+        self._guardar_cache("policies", json.dumps(policies))
         return policies
 
     # ─── Configuración ─────────────────────────────────
@@ -439,9 +439,9 @@ class AdministradorBaseDatos:
     # RF-13/RF-15 — Recupera parámetros de operación en nube y compresión.
     def get_config(self):
         """Devuelve la configuración del sistema desde MySQL."""
-        conn = self.get_mysql()
+        conn = self.obtener_mysql()
         if not conn:
-            return self._get_cached("config", {
+            return self._obtener_cache("config", {
                 "compressionEnabled": False,
                 "compressionThresholdMb": DEFAULT_COMPRESSION_THRESHOLD_MB,
                 "deleteLocalAfterUpload": False,
@@ -455,7 +455,7 @@ class AdministradorBaseDatos:
             config = cursor.fetchone()
         except mysql.connector.Error as error:
             logging.getLogger(__name__).warning("Falló la consulta de configuración; se usará caché: %s", error)
-            return self._get_cached("config", {
+            return self._obtener_cache("config", {
                 "compressionEnabled": False,
                 "compressionThresholdMb": DEFAULT_COMPRESSION_THRESHOLD_MB,
                 "deleteLocalAfterUpload": False,
@@ -469,7 +469,7 @@ class AdministradorBaseDatos:
             # Convierte valores booleanos.
             config["compressionEnabled"] = bool(config.get("compressionEnabled", 0))
             config["deleteLocalAfterUpload"] = bool(config.get("deleteLocalAfterUpload", 0))
-            self._set_cached("config", json.dumps(config, default=str))
+            self._guardar_cache("config", json.dumps(config, default=str))
             return config
 
         return {
@@ -480,7 +480,7 @@ class AdministradorBaseDatos:
         }
 
     # RF-13 — Devuelve credenciales de Drive solo si la configuración es válida.
-    def get_google_credentials(self):
+    def obtener_credenciales_google(self):
         """Devuelve las credenciales del cliente OAuth de Google desde Config.cloudCredentials."""
         config = self.get_config()
         creds_json = config.get("cloudCredentials", "")
@@ -500,11 +500,11 @@ class AdministradorBaseDatos:
     # ─── Nomenclaturas ─────────────────────────────────
 
     # RF-06 — Recupera campos de nomenclatura y usa caché si no hay conexión.
-    def get_nomenclatures(self):
+    def obtener_nomenclaturas(self):
         """Devuelve los campos de nomenclatura desde MySQL."""
-        conn = self.get_mysql()
+        conn = self.obtener_mysql()
         if not conn:
-            return self._get_cached("nomenclatures", [])
+            return self._obtener_cache("nomenclatures", [])
 
         cursor = None
         try:
@@ -513,22 +513,22 @@ class AdministradorBaseDatos:
             fields = cursor.fetchall()
         except mysql.connector.Error as error:
             logging.getLogger(__name__).warning("Falló la consulta de nomenclaturas; se usará caché: %s", error)
-            return self._get_cached("nomenclatures", [])
+            return self._obtener_cache("nomenclatures", [])
         finally:
             if cursor:
                 cursor.close()
 
-        self._set_cached("nomenclatures", json.dumps(fields, default=str))
+        self._guardar_cache("nomenclatures", json.dumps(fields, default=str))
         return fields
 
     # ─── Bitácoras de auditoría ────────────────────────
 
     # RF-16 — Persiste auditoría cifrada localmente y conserva el registro remoto si está disponible.
-    def create_audit_log(self, user_id, user_name, action, details, status="SUCCESS", workspace_id=None):
+    def crear_bitacora_auditoria(self, user_id, user_name, action, details, status="SUCCESS", workspace_id=None):
         """Crea una bitácora local cifrada con AES-GCM y luego intenta guardarla en SaaS."""
         log_id = str(uuid.uuid4())
 
-        encrypted_payload = encrypt_local_payload({
+        encrypted_payload = cifrar_contenido_local({
             "user_id": user_id,
             "user_name": user_name,
             "action": action,
@@ -539,7 +539,7 @@ class AdministradorBaseDatos:
 
         # Guarda localmente solo el sobre cifrado. Los metadatos de búsqueda se
         # reconstruyen en memoria justo antes de la sincronización.
-        sqlite_conn = self.get_sqlite()
+        sqlite_conn = self.obtener_sqlite()
         sqlite_conn.execute(
             """INSERT INTO local_audit_log (id, user_id, user_name, action, details, status, workspace_id, synced)
                VALUES (?, ?, ?, ?, ?, ?, ?, 0)""",
@@ -549,7 +549,7 @@ class AdministradorBaseDatos:
         sqlite_conn.close()
 
         # Intenta sincronizar con MySQL.
-        conn = self.get_mysql()
+        conn = self.obtener_mysql()
         if conn:
             try:
                 cursor = conn.cursor()
@@ -563,7 +563,7 @@ class AdministradorBaseDatos:
                 cursor.close()
 
                 # Marca el registro como sincronizado.
-                sqlite_conn = self.get_sqlite()
+                sqlite_conn = self.obtener_sqlite()
                 sqlite_conn.execute("UPDATE local_audit_log SET synced = 1 WHERE id = ?", (log_id,))
                 sqlite_conn.commit()
                 sqlite_conn.close()
@@ -571,13 +571,13 @@ class AdministradorBaseDatos:
                 logging.getLogger(__name__).warning("No se pudo replicar la bitácora a MySQL: %s", e)
 
     # RF-17 — Reintenta cada bitácora pendiente y registra fallos sin detener el lote.
-    def sync_pending_logs(self):
+    def sincronizar_bitacoras_pendientes(self):
         """Sincroniza con MySQL las bitácoras pendientes de SQLite."""
-        conn = self.get_mysql()
+        conn = self.obtener_mysql()
         if not conn:
             return 0
 
-        sqlite_conn = self.get_sqlite()
+        sqlite_conn = self.obtener_sqlite()
         pending = sqlite_conn.execute(
             "SELECT * FROM local_audit_log WHERE synced = 0"
         ).fetchall()
@@ -585,7 +585,7 @@ class AdministradorBaseDatos:
         synced_count = 0
         for log in pending:
             try:
-                log_data = self._read_audit_log_payload(log)
+                log_data = self._leer_contenido_bitacora_auditoria(log)
                 cursor = conn.cursor()
                 cursor.execute(
                     """INSERT INTO AuditLog (id, userId, userName, action, details, status, workspaceId, createdAt)
@@ -607,10 +607,10 @@ class AdministradorBaseDatos:
         return synced_count
 
     @staticmethod
-    def _read_audit_log_payload(log):
+    def _leer_contenido_bitacora_auditoria(log):
         """Lee filas cifradas y conserva la compatibilidad con colas antiguas."""
-        if is_encrypted_local_payload(log["details"]):
-            payload = decrypt_local_payload(log["details"])
+        if es_contenido_local_cifrado(log["details"]):
+            payload = descifrar_contenido_local(log["details"])
             required_fields = {
                 "user_id",
                 "user_name",
@@ -634,10 +634,10 @@ class AdministradorBaseDatos:
 
     # ─── Cola local ────────────────────────────────────
 
-    def add_to_queue(self, file_path, original_name, workspace_id=None, workspace_name=None):
+    def agregar_a_cola(self, file_path, original_name, workspace_id=None, workspace_name=None):
         """Añade un documento a la cola local de procesamiento."""
         doc_id = str(uuid.uuid4())
-        conn = self.get_sqlite()
+        conn = self.obtener_sqlite()
         conn.execute(
             """INSERT INTO local_queue (id, file_path, original_name, workspace_id, workspace_name)
                VALUES (?, ?, ?, ?, ?)""",
@@ -647,7 +647,7 @@ class AdministradorBaseDatos:
         conn.close()
         return doc_id
 
-    def update_queue_item(self, doc_id, **kwargs):
+    def actualizar_elemento_cola(self, doc_id, **kwargs):
         """Actualiza cualquier campo de un elemento de la cola."""
         allowed_fields = {
             "file_path",
@@ -664,7 +664,7 @@ class AdministradorBaseDatos:
         if invalid_fields:
             raise ValueError(f"Campos de cola no válidos: {', '.join(sorted(invalid_fields))}")
 
-        conn = self.get_sqlite()
+        conn = self.obtener_sqlite()
         sets = []
         values = []
         for key, val in kwargs.items():
@@ -677,9 +677,9 @@ class AdministradorBaseDatos:
         conn.commit()
         conn.close()
 
-    def get_queue_item(self, doc_id):
+    def obtener_elemento_cola(self, doc_id):
         """Devuelve un elemento de la cola por su identificador estable."""
-        conn = self.get_sqlite()
+        conn = self.obtener_sqlite()
         item = conn.execute(
             "SELECT * FROM local_queue WHERE id = ?",
             (doc_id,),
@@ -689,7 +689,7 @@ class AdministradorBaseDatos:
 
     def get_queue_items(self, status=None):
         """Devuelve elementos de la cola, con filtro opcional por estado."""
-        conn = self.get_sqlite()
+        conn = self.obtener_sqlite()
         if status:
             items = conn.execute(
                 "SELECT * FROM local_queue WHERE status = ? ORDER BY created_at DESC", (status,)
@@ -702,16 +702,16 @@ class AdministradorBaseDatos:
         return [dict(i) for i in items]
 
     # RF-08 — Limita la consulta a documentos que requieren revisión manual.
-    def get_pending_review(self):
+    def obtener_revision_pendiente(self):
         """Devuelve los elementos que requieren revisión manual."""
         return self.get_queue_items(status="PENDING_REVIEW")
 
     # ─── Sesiones ──────────────────────────────────────
 
-    def create_session(self, user_id, workspace_id=None, workspace_name=None):
+    def crear_sesion(self, user_id, workspace_id=None, workspace_name=None):
         """Crea una nueva sesión de escaneo."""
         session_id = str(uuid.uuid4())
-        conn = self.get_sqlite()
+        conn = self.obtener_sqlite()
         conn.execute(
             """INSERT INTO sessions (id, user_id, workspace_id, workspace_name)
                VALUES (?, ?, ?, ?)""",
@@ -721,9 +721,9 @@ class AdministradorBaseDatos:
         conn.close()
         return session_id
 
-    def close_session(self, session_id):
+    def cerrar_sesion(self, session_id):
         """Cierra una sesión de escaneo."""
-        conn = self.get_sqlite()
+        conn = self.obtener_sqlite()
         conn.execute(
             "UPDATE sessions SET status = 'CLOSED', ended_at = datetime('now') WHERE id = ?",
             (session_id,)
@@ -731,9 +731,9 @@ class AdministradorBaseDatos:
         conn.commit()
         conn.close()
 
-    def get_active_session(self, user_id):
+    def obtener_sesion_activa(self, user_id):
         """Devuelve la sesión activa de un usuario."""
-        conn = self.get_sqlite()
+        conn = self.obtener_sqlite()
         session = conn.execute(
             "SELECT * FROM sessions WHERE user_id = ? AND status = 'ACTIVE' ORDER BY started_at DESC LIMIT 1",
             (user_id,)
@@ -741,17 +741,17 @@ class AdministradorBaseDatos:
         conn.close()
         return dict(session) if session else None
 
-    def increment_session_doc_count(self, session_id):
+    def incrementar_cantidad_documentos_sesion(self, session_id):
         """Aumenta el conteo de documentos de una sesión."""
-        conn = self.get_sqlite()
+        conn = self.obtener_sqlite()
         conn.execute("UPDATE sessions SET doc_count = doc_count + 1 WHERE id = ?", (session_id,))
         conn.commit()
         conn.close()
 
     # ─── Ayudantes de caché ────────────────────────────
 
-    def _set_cached(self, key, value):
-        conn = self.get_sqlite()
+    def _guardar_cache(self, key, value):
+        conn = self.obtener_sqlite()
         conn.execute(
             "INSERT OR REPLACE INTO cached_config (key, value, updated_at) VALUES (?, ?, datetime('now'))",
             (key, value)
@@ -760,8 +760,8 @@ class AdministradorBaseDatos:
         conn.close()
 
     # Obtiene cached según las reglas del componente.
-    def _get_cached(self, key, default=None):
-        conn = self.get_sqlite()
+    def _obtener_cache(self, key, default=None):
+        conn = self.obtener_sqlite()
         row = conn.execute("SELECT value FROM cached_config WHERE key = ?", (key,)).fetchone()
         conn.close()
         if row:

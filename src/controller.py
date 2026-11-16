@@ -19,10 +19,10 @@ from src.core.crypto_engine import MotorCifrado
 from src.core.file_structurer import EstructuradorArchivos
 from src.core.pending_tray import BandejaPendientes
 from src.core.secure_file_writer import SECURE_FILE_MAGIC, EscritorArchivoSeguro
-from src.core.native_file_dialog import select_document_files
+from src.core.native_file_dialog import seleccionar_archivos_documento
 from src.hardware.scanner import AdministradorEscaner
 from src.sync.cloud_uploader import CargadorNube, DEFAULT_COMPRESSION_THRESHOLD_MB
-from src.app_paths import PROCESSED_DIR, PENDING_REVIEW_DIR, ensure_runtime_dirs
+from src.app_paths import PROCESSED_DIR, PENDING_REVIEW_DIR, asegurar_directorios_ejecucion
 from src.capture_context import (
     ContextoSesionEscritorio,
     ErrorContextoCaptura,
@@ -44,13 +44,13 @@ crypto = MotorCifrado()
 scanner = AdministradorEscaner()
 capture_context = ContextoSesionEscritorio()
 
-ensure_runtime_dirs()
+asegurar_directorios_ejecucion()
 OUTPUT_DIR = PROCESSED_DIR
 PENDING_DIR = PENDING_REVIEW_DIR
 
 
 # RF-13 — Valida el intervalo de sincronización y usa un valor seguro de respaldo.
-def _configured_sync_interval():
+def _obtener_intervalo_sincronizacion():
     try:
         configured_value = int(os.getenv(SYNC_INTERVAL_ENV, DEFAULT_SYNC_INTERVAL_SECONDS))
         return max(MIN_SYNC_INTERVAL_SECONDS, configured_value)
@@ -59,7 +59,7 @@ def _configured_sync_interval():
         return DEFAULT_SYNC_INTERVAL_SECONDS
 
 
-SYNC_INTERVAL_SECONDS = _configured_sync_interval()
+SYNC_INTERVAL_SECONDS = _obtener_intervalo_sincronizacion()
 _sync_thread = None
 _sync_stop_event = threading.Event()
 _sync_wakeup_event = threading.Event()
@@ -67,14 +67,14 @@ _sync_lock = threading.Lock()
 
 
 # RF-13/RF-17 — Inicia una sola vez la sincronización automática de documentos y logs.
-def start_background_sync():
+def iniciar_sincronizacion_segundo_plano():
     global _sync_thread
     if _sync_thread and _sync_thread.is_alive():
         return
 
     _sync_stop_event.clear()
     _sync_thread = threading.Thread(
-        target=_background_sync_loop,
+        target=_bucle_sincronizacion_segundo_plano,
         name="docuzen-background-sync",
         daemon=True,
     )
@@ -82,26 +82,26 @@ def start_background_sync():
 
 
 # RF-13/RF-17 — Solicita detener el sincronizador y desbloquea su espera actual.
-def stop_background_sync():
+def detener_sincronizacion_segundo_plano():
     """Solicita una detención ordenada sin bloquear el cierre de la aplicación."""
     _sync_stop_event.set()
     _sync_wakeup_event.set()
 
 
 # RF-13 — Despierta el sincronizador después de encolar trabajo nuevo.
-def _request_background_sync():
+def _solicitar_sincronizacion_segundo_plano():
     _sync_wakeup_event.set()
 
 
 # RF-13/RF-17 — Reintenta documentos y bitácoras en segundo plano cuando hay conexión.
-def _background_sync_loop():
+def _bucle_sincronizacion_segundo_plano():
     """Sube documentos protegidos y bitácoras cifradas al restablecerse la conexión."""
     was_online = False
     while not _sync_stop_event.is_set():
-        online = db.is_online()
+        online = db.esta_en_linea()
         if online:
             try:
-                result = _sync_offline_backlog()
+                result = _sincronizar_acumulado_sin_conexion()
                 if not was_online or result["documents"] or result["logs"]:
                     LOGGER.info(
                         "Sincronización automática: %s documento(s), %s log(s).",
@@ -117,7 +117,7 @@ def _background_sync_loop():
 
 
 # RF-03 — Devuelve un error uniforme si falta el contexto requerido para capturar.
-def _capture_guard_failure():
+def _obtener_fallo_proteccion_captura():
     try:
         exigir_contexto_captura_activo(db, capture_context)
         return None
@@ -132,9 +132,9 @@ def _capture_guard_failure():
 def login(email, password, totp_code=""):
     """Autentica a un usuario de escritorio con contraseña y TOTP en MySQL."""
     try:
-        user = db.authenticate_user(email, password, totp_code)
+        user = db.autenticar_usuario(email, password, totp_code)
         capture_context.establecer_usuario(user)
-        db.create_audit_log(
+        db.crear_bitacora_auditoria(
             user["id"], user["name"], "LOGIN",
             "Inicio de sesión desde escritorio", "SUCCESS"
         )
@@ -161,13 +161,13 @@ def logout():
 
     if capture_context.session_id:
         try:
-            scanner.stop_watching()
-            db.close_session(capture_context.session_id)
+            scanner.detener_vigilancia()
+            db.cerrar_sesion(capture_context.session_id)
         except Exception as error:
             LOGGER.exception("Falló el cierre de sesión de captura: %s", error)
 
     if capture_context.user:
-        db.create_audit_log(
+        db.crear_bitacora_auditoria(
             capture_context.user["id"], capture_context.user["name"], "LOGOUT",
             "Cierre de sesión", "SUCCESS"
         )
@@ -189,7 +189,7 @@ def get_workspaces():
     """Devuelve los espacios de trabajo asignados al usuario actual."""
     if not capture_context.user:
         return []
-    return db.get_user_workspaces(capture_context.user["id"])
+    return db.obtener_espacios_usuario(capture_context.user["id"])
 
 
 # RF-03 — Valida permisos y bloqueos antes de cambiar el espacio seleccionado.
@@ -225,17 +225,17 @@ def start_session():
         return {"success": False, "error": str(error)}
 
     try:
-        session_id = db.create_session(
+        session_id = db.crear_sesion(
             capture_context.user["id"],
             workspace["id"],
             workspace["name"]
         )
         capture_context.iniciar_sesion(session_id)
 
-        scanner.on_file_callback = _on_file_detected
-        scanner.start_watching()
+        scanner.on_file_callback = _al_detectar_archivo
+        scanner.iniciar_vigilancia()
 
-        db.create_audit_log(
+        db.crear_bitacora_auditoria(
             capture_context.user["id"], capture_context.user["name"], "SESSION_STARTED",
             f"Sesión iniciada en espacio: {workspace['name']}",
             "SUCCESS", workspace["id"]
@@ -251,8 +251,8 @@ def start_session():
         capture_context.finalizar_sesion()
         if session_id:
             try:
-                scanner.stop_watching()
-                db.close_session(session_id)
+                scanner.detener_vigilancia()
+                db.cerrar_sesion(session_id)
             except Exception as cleanup_error:
                 LOGGER.exception("Falló la reversión del inicio de sesión: %s", cleanup_error)
 
@@ -278,13 +278,13 @@ def end_session():
     session_id = capture_context.session_id
     workspace = capture_context.workspace
 
-    scanner.stop_watching()
-    db.close_session(session_id)
+    scanner.detener_vigilancia()
+    db.cerrar_sesion(session_id)
 
     # Procesa y sube todos los documentos pendientes.
-    result = _process_all_pending()
+    result = _procesar_todos_pendientes()
 
-    db.create_audit_log(
+    db.crear_bitacora_auditoria(
         capture_context.user["id"], capture_context.user["name"], "SESSION_ENDED",
         f"Sesión cerrada. Docs procesados: {result['processed']}, Errores: {result['errors']}",
         "SUCCESS" if result["errors"] == 0 else "FAILURE",
@@ -292,7 +292,7 @@ def end_session():
     )
 
     # Sincroniza las bitácoras pendientes.
-    synced = db.sync_pending_logs()
+    synced = db.sincronizar_bitacoras_pendientes()
 
     capture_context.finalizar_sesion()
     return {
@@ -310,13 +310,13 @@ def end_session():
 @eel.expose
 def import_files(file_paths):
     """Importa archivos manualmente solo si el contexto de captura RF-03 es válido."""
-    guard_failure = _capture_guard_failure()
+    guard_failure = _obtener_fallo_proteccion_captura()
     if guard_failure:
         return guard_failure
 
     imported = scanner.import_files(file_paths)
     for path in imported:
-        _on_file_detected(path)
+        _al_detectar_archivo(path)
 
     return {"success": True, "count": len(imported)}
 
@@ -331,18 +331,18 @@ def get_scanners():
 @eel.expose
 def scan_document(device_id=None):
     """Inicia el escaneo físico solo si el contexto de captura RF-03 es válido."""
-    guard_failure = _capture_guard_failure()
+    guard_failure = _obtener_fallo_proteccion_captura()
     if guard_failure:
         return guard_failure
 
     try:
-        path = scanner.scan_physical_document(device_id)
+        path = scanner.escanear_documento_fisico(device_id)
         if path:
-            _on_file_detected(path)
+            _al_detectar_archivo(path)
             return {"success": True, "path": path}
         if not scanner.is_paused:
-            scanner.pause_capture("El escáner no devolvió un folio válido.")
-        db.create_audit_log(
+            scanner.pausar_captura("El escáner no devolvió un folio válido.")
+        db.crear_bitacora_auditoria(
             capture_context.user["id"],
             capture_context.user["name"],
             "CAPTURE_PAUSED",
@@ -370,13 +370,13 @@ def scan_document(device_id=None):
 @eel.expose
 def resume_capture():
     """Reanuda una sesión pausada por un atasco o fallo mecánico del escáner."""
-    guard_failure = _capture_guard_failure()
+    guard_failure = _obtener_fallo_proteccion_captura()
     if guard_failure:
         return guard_failure
 
     try:
         result = scanner.resume_capture()
-        db.create_audit_log(
+        db.crear_bitacora_auditoria(
             capture_context.user["id"],
             capture_context.user["name"],
             "CAPTURE_RESUMED",
@@ -394,19 +394,19 @@ def resume_capture():
 @eel.expose
 def pick_and_import_files():
     """Abre un selector nativo de archivos solo si el contexto de captura RF-03 es válido."""
-    guard_failure = _capture_guard_failure()
+    guard_failure = _obtener_fallo_proteccion_captura()
     if guard_failure:
         return guard_failure
 
     try:
-        files = select_document_files()
+        files = seleccionar_archivos_documento()
 
         if not files:
             return {"success": True, "count": 0, "message": "No se seleccionaron archivos."}
 
         imported = scanner.import_files(files)
         for path in imported:
-            _on_file_detected(path)
+            _al_detectar_archivo(path)
 
         return {"success": True, "count": len(imported)}
     except Exception as error:
@@ -450,14 +450,14 @@ def export_files():
 @eel.expose
 def get_session_files():
     """Devuelve los archivos del espacio temporal actual."""
-    return scanner.get_temp_files()
+    return scanner.obtener_archivos_temporales()
 
 
 # RF-08 — Devuelve documentos pendientes de revisión manual.
 @eel.expose
 def get_pending_review():
     """Devuelve los documentos que requieren revisión manual."""
-    return db.get_pending_review()
+    return db.obtener_revision_pendiente()
 
 
 @eel.expose
@@ -476,7 +476,7 @@ def correct_document(doc_id, new_name):
     if not capture_context.user:
         return {"success": False, "error": "No autenticado."}
 
-    item = db.get_queue_item(doc_id)
+    item = db.obtener_elemento_cola(doc_id)
     if not item or item.get("status") != "PENDING_REVIEW":
         return {"success": False, "error": "Documento no encontrado."}
 
@@ -484,26 +484,26 @@ def correct_document(doc_id, new_name):
     if not os.path.exists(old_path):
         return {"success": False, "error": "Archivo no encontrado en disco."}
 
-    corrected_name = _normalize_corrected_pdf_name(new_name)
+    corrected_name = _normalizar_nombre_pdf_corregido(new_name)
     if not corrected_name:
         return {
             "success": False,
             "error": "Ingresa un nombre PDF válido sin carpetas ni caracteres reservados.",
         }
 
-    assigned_workspaces = db.get_user_workspaces(capture_context.user["id"])
+    assigned_workspaces = db.obtener_espacios_usuario(capture_context.user["id"])
     if not any(workspace.get("id") == item.get("workspace_id") for workspace in assigned_workspaces):
         return {"success": False, "error": "Ya no tienes acceso al espacio de este documento."}
 
     # RF-11: el nombre corregido solo afecta al archivo de salida. El folio original
     # cifrado se vuelve a leer y siempre pasa por OCR, visión y cifrado.
-    result = _process_single_document(
+    result = _procesar_documento_individual(
         old_path,
         item["workspace_id"],
         corrected_name=corrected_name,
     )
     if result["success"]:
-        db.update_queue_item(
+        db.actualizar_elemento_cola(
             doc_id,
             status="PROCESSED",
             file_path=result["output_path"],
@@ -516,10 +516,10 @@ def correct_document(doc_id, new_name):
             os.remove(old_path)
         except OSError:
             LOGGER.warning("No se pudo retirar el folio reemplazado %s.", old_path, exc_info=True)
-        _request_background_sync()
+        _solicitar_sincronizacion_segundo_plano()
         return {"success": True, "result": result}
 
-    db.update_queue_item(
+    db.actualizar_elemento_cola(
         doc_id,
         status="PENDING_REVIEW",
         error_message=result.get("error", "Fallo en re-evaluación"),
@@ -532,7 +532,7 @@ def correct_document(doc_id, new_name):
 @eel.expose
 def get_app_status():
     """Devuelve el estado general de la aplicación."""
-    online = db.is_online()
+    online = db.esta_en_linea()
     return {
         "online": online,
         "user": capture_context.user,
@@ -552,7 +552,7 @@ def get_app_status():
 @eel.expose
 def sync_now():
     """Inicia manualmente la misma sincronización de documentos y bitácoras que RF-13."""
-    result = _sync_offline_backlog()
+    result = _sincronizar_acumulado_sin_conexion()
     return {"synced": result["logs"], "documents": result["documents"]}
 
 
@@ -565,9 +565,9 @@ def get_config():
 # ─── Procesamiento interno ────────────────────────────
 
 # RF-03/RF-04/RF-12 — Encola el folio únicamente dentro del contexto de captura vigente.
-def _on_file_detected(file_path):
+def _al_detectar_archivo(file_path):
     """Encola un archivo detectado solo mientras el contexto de captura RF-03 siga válido."""
-    guard_failure = _capture_guard_failure()
+    guard_failure = _obtener_fallo_proteccion_captura()
     if guard_failure:
         LOGGER.warning(
             "Archivo ignorado fuera del contexto de captura: %s",
@@ -578,14 +578,14 @@ def _on_file_detected(file_path):
     workspace = capture_context.workspace
 
     # Añade el archivo a la cola.
-    doc_id = db.add_to_queue(
+    doc_id = db.agregar_a_cola(
         file_path,
         os.path.basename(file_path),
         workspace["id"],
         workspace["name"]
     )
 
-    db.increment_session_doc_count(capture_context.session_id)
+    db.incrementar_cantidad_documentos_sesion(capture_context.session_id)
 
     # Notifica a la interfaz sin ocultar fallos de los observadores.
     try:
@@ -599,19 +599,19 @@ def _on_file_detected(file_path):
 
 
 # RF-04/RF-06/RF-07/RF-08/RF-09/RF-10/RF-15 — Procesa metadatos, seguridad y protección documental.
-def _process_single_document(file_path, workspace_id=None, corrected_name=None):
+def _procesar_documento_individual(file_path, workspace_id=None, corrected_name=None):
     """Procesa un documento con OCR, visión, compresión opcional y cifrado."""
-    workspace = db.get_workspace(workspace_id) if workspace_id else capture_context.workspace
+    workspace = db.obtener_espacio_trabajo(workspace_id) if workspace_id else capture_context.workspace
     if not workspace:
         return {"success": False, "error": "No hay espacio de trabajo disponible."}
 
-    all_policies = db.get_security_policies()
+    all_policies = db.obtener_politicas_seguridad()
     policies = [
         policy for policy in all_policies
         if not policy.get("workspaceId") or policy.get("workspaceId") == workspace.get("id")
     ]
     config = db.get_config()
-    nomenclatures = db.get_nomenclatures()
+    nomenclatures = db.obtener_nomenclaturas()
     source_extension = os.path.splitext(file_path)[1].lower()
     clear_path = None
     converted_pdf_path = None
@@ -629,7 +629,7 @@ def _process_single_document(file_path, workspace_id=None, corrected_name=None):
                 magic = source_file.read(len(SECURE_FILE_MAGIC))
 
             if magic == SECURE_FILE_MAGIC:
-                clear_file.write(EscritorArchivoSeguro.read_secure(file_path))
+                clear_file.write(EscritorArchivoSeguro.leer_seguro(file_path))
             else:
                 # Compatibilidad con colas creadas antes de RF-04.
                 with open(file_path, "rb") as source_file:
@@ -637,11 +637,11 @@ def _process_single_document(file_path, workspace_id=None, corrected_name=None):
 
         text = ""
         if source_extension == ".pdf":
-            text = ocr.extract_text_from_pdf(clear_path)
+            text = ocr.extraer_texto_pdf(clear_path)
             processing_pdf_path = clear_path
         elif source_extension in [".png", ".jpg", ".jpeg", ".tiff", ".bmp"]:
-            text = ocr.extract_text_from_image(clear_path)
-            converted_pdf_path = _convert_image_to_temporary_pdf(clear_path)
+            text = ocr.extraer_texto_imagen(clear_path)
+            converted_pdf_path = _convertir_imagen_pdf_temporal(clear_path)
             processing_pdf_path = converted_pdf_path
         else:
             return {
@@ -651,8 +651,8 @@ def _process_single_document(file_path, workspace_id=None, corrected_name=None):
             }
 
         # RF-06/RF-07: los metadatos extraídos por OCR determinan las carpetas y el nombre.
-        nomenclature_data = ocr.extract_nomenclature(text, nomenclatures)
-        title_hierarchy = ocr.extract_title_hierarchy(text)
+        nomenclature_data = ocr.extraer_nomenclatura(text, nomenclatures)
+        title_hierarchy = ocr.extraer_jerarquia_titulo(text)
         structured_path = None
         if corrected_name:
             structured_path = os.path.join(OUTPUT_DIR, corrected_name)
@@ -677,9 +677,9 @@ def _process_single_document(file_path, workspace_id=None, corrected_name=None):
             }
 
         # RF-10: el motor de cifrado prioriza VISUAL, luego SEMANTIC y DEFAULT.
-        semantic_policy = ocr.check_semantic_policies(text, policies)
-        visual_policy = vision.check_document(clear_path, policies)
-        encryption_result = crypto.resolve_password(workspace, semantic_policy, visual_policy)
+        semantic_policy = ocr.verificar_politicas_semanticas(text, policies)
+        visual_policy = vision.verificar_documento(clear_path, policies)
+        encryption_result = crypto.resolver_contrasena(workspace, semantic_policy, visual_policy)
         if not encryption_result["password"]:
             return {
                 "success": False,
@@ -697,14 +697,14 @@ def _process_single_document(file_path, workspace_id=None, corrected_name=None):
                 "compressionThresholdMb",
                 DEFAULT_COMPRESSION_THRESHOLD_MB,
             )
-            if compression.should_compress(processing_pdf_path, threshold):
+            if compression.debe_comprimir(processing_pdf_path, threshold):
                 with tempfile.NamedTemporaryFile(
                     suffix=".pdf",
                     prefix="docuzen-compressed-",
                     delete=False,
                 ) as compressed_file:
                     compressed_pdf_path = compressed_file.name
-                if compression.compress_pdf(processing_pdf_path, compressed_pdf_path):
+                if compression.comprimir_pdf(processing_pdf_path, compressed_pdf_path):
                     source_for_encryption = compressed_pdf_path
                     compressed = True
 
@@ -715,8 +715,8 @@ def _process_single_document(file_path, workspace_id=None, corrected_name=None):
             output_path = os.path.join(OUTPUT_DIR, output_name)
 
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        output_path = crypto._prevent_collision(output_path)
-        encrypted = crypto.encrypt_pdf(
+        output_path = crypto._evitar_colision(output_path)
+        encrypted = crypto.cifrar_pdf(
             source_for_encryption,
             output_path,
             encryption_result["password"],
@@ -773,7 +773,7 @@ def _process_single_document(file_path, workspace_id=None, corrected_name=None):
 
 
 # RF-06 — Convierte imágenes a PDF temporal para continuar el procesamiento OCR.
-def _convert_image_to_temporary_pdf(image_path):
+def _convertir_imagen_pdf_temporal(image_path):
     """Convierte una imagen importada a PDF antes del cifrado obligatorio del documento."""
     from PIL import Image
 
@@ -796,7 +796,7 @@ def _convert_image_to_temporary_pdf(image_path):
         raise
 
 
-def _normalize_corrected_pdf_name(new_name):
+def _normalizar_nombre_pdf_corregido(new_name):
     """Acepta solo un nombre base de PDF seguro desde la interfaz de corrección manual."""
     candidate = str(new_name or "").strip()
     if not candidate or candidate != os.path.basename(candidate):
@@ -811,10 +811,10 @@ def _normalize_corrected_pdf_name(new_name):
 
 
 # RF-12/RF-13 — Procesa la cola protegida y sube los documentos sin perder reintentos.
-def _process_all_pending():
+def _procesar_todos_pendientes():
 
     config = db.get_config()
-    google_creds = db.get_google_credentials()
+    google_creds = db.obtener_credenciales_google()
     # Combina las credenciales de Google con la configuración del cargador.
     merged_config = {**config, **google_creds}
     active_uploader = CargadorNube(merged_config)
@@ -836,12 +836,12 @@ def _process_all_pending():
             except Exception:
                 LOGGER.debug("La interfaz no está disponible para recibir el progreso.", exc_info=True)
 
-            result = _process_single_document(item["file_path"], item["workspace_id"])
+            result = _procesar_documento_individual(item["file_path"], item["workspace_id"])
 
             if result.get("success"):
                 # RF-12: la salida protegida se convierte en el contenido persistente
                 # para reintentos antes de intentar cualquier operación de red.
-                db.update_queue_item(
+                db.actualizar_elemento_cola(
                     item["id"],
                     status="PROCESSED",
                     file_path=result["output_path"],
@@ -849,9 +849,9 @@ def _process_all_pending():
                     policy_id=result["encryption"].get("policy_id"),
                     error_message=None,
                 )
-                processed_item = db.get_queue_item(item["id"])
+                processed_item = db.obtener_elemento_cola(item["id"])
                 with _sync_lock:
-                    upload_result = _upload_processed_item(processed_item, active_uploader, config)
+                    upload_result = _subir_elemento_procesado(processed_item, active_uploader, config)
 
                 if upload_result.get("success"):
                     uploaded += 1
@@ -879,7 +879,7 @@ def _process_all_pending():
                             exc_info=True,
                         )
 
-                db.create_audit_log(
+                db.crear_bitacora_auditoria(
                     capture_context.user["id"] if capture_context.user else None,
                     capture_context.user["name"] if capture_context.user else "Sistema",
                     "DOCUMENT_PROCESSED",
@@ -902,7 +902,7 @@ def _process_all_pending():
                     moved_path = BandejaPendientes.manejar_fallo_ocr(item["file_path"], PENDING_DIR)
                     if moved_path:
                         pending_path = moved_path
-                db.update_queue_item(
+                db.actualizar_elemento_cola(
                     item["id"],
                     status="PENDING_REVIEW",
                     file_path=pending_path,
@@ -910,7 +910,7 @@ def _process_all_pending():
                 )
                 errors += 1
             else:
-                db.update_queue_item(
+                db.actualizar_elemento_cola(
                     item["id"],
                     status="ERROR",
                     error_message=result.get("error", "Error desconocido")
@@ -919,32 +919,32 @@ def _process_all_pending():
 
         except Exception as e:
             LOGGER.exception("Falló el procesamiento del elemento de cola %s.", item.get("id"))
-            db.update_queue_item(item["id"], status="ERROR", error_message=str(e))
+            db.actualizar_elemento_cola(item["id"], status="ERROR", error_message=str(e))
             errors += 1
 
-    _remove_empty_capture_directories()
+    _eliminar_directorios_captura_vacios()
 
     return {"processed": processed, "errors": errors, "uploaded": uploaded}
 
 
 # RF-12/RF-13 — Reintenta la subida desde la copia protegida y conserva errores para reintento.
-def _upload_processed_item(item, active_uploader, config):
+def _subir_elemento_procesado(item, active_uploader, config):
     """Sube un elemento ya protegido de la cola sin volver a procesar datos sin cifrar."""
     if not item or item.get("status") != "PROCESSED":
         return {"success": False, "error": "Elemento de cola no disponible.", "provider": "NONE"}
 
     protected_path = item.get("file_path")
     if not protected_path or not os.path.exists(protected_path):
-        db.update_queue_item(
+        db.actualizar_elemento_cola(
             item["id"],
             status="ERROR",
             error_message="El PDF protegido pendiente ya no existe en disco.",
         )
         return {"success": False, "error": "Archivo protegido no encontrado.", "provider": "NONE"}
 
-    workspace = db.get_workspace(item.get("workspace_id"))
+    workspace = db.obtener_espacio_trabajo(item.get("workspace_id"))
     if not workspace:
-        db.update_queue_item(
+        db.actualizar_elemento_cola(
             item["id"],
             error_message="No se encontró el espacio de trabajo para sincronizar.",
         )
@@ -958,14 +958,14 @@ def _upload_processed_item(item, active_uploader, config):
     )
 
     if upload_result.get("success"):
-        db.update_queue_item(item["id"], status="UPLOADED", error_message=None)
+        db.actualizar_elemento_cola(item["id"], status="UPLOADED", error_message=None)
         if config.get("deleteLocalAfterUpload"):
             try:
                 os.remove(protected_path)
             except OSError:
                 LOGGER.warning("No se pudo borrar el PDF local ya subido %s.", protected_path, exc_info=True)
     else:
-        db.update_queue_item(
+        db.actualizar_elemento_cola(
             item["id"],
             status="PROCESSED",
             error_message=upload_result.get("error", "Subida pendiente por falta de conexión."),
@@ -975,8 +975,8 @@ def _upload_processed_item(item, active_uploader, config):
 
 
 # RF-13/RF-17 — Sincroniza la cola de documentos y las bitácoras en un pase protegido.
-def _sync_offline_backlog():
-    if not db.is_online():
+def _sincronizar_acumulado_sin_conexion():
+    if not db.esta_en_linea():
         return {"documents": 0, "logs": 0}
 
     if not _sync_lock.acquire(blocking=False):
@@ -984,17 +984,17 @@ def _sync_offline_backlog():
 
     try:
         config = db.get_config()
-        merged_config = {**config, **db.get_google_credentials()}
+        merged_config = {**config, **db.obtener_credenciales_google()}
         active_uploader = CargadorNube(merged_config)
         uploaded = 0
 
         for item in db.get_queue_items(status="PROCESSED"):
-            result = _upload_processed_item(item, active_uploader, config)
+            result = _subir_elemento_procesado(item, active_uploader, config)
             if not result.get("success"):
                 continue
 
             uploaded += 1
-            db.create_audit_log(
+            db.crear_bitacora_auditoria(
                 None,
                 "Sincronización automática",
                 "DOCUMENT_UPLOADED_AUTOMATICALLY",
@@ -1008,13 +1008,13 @@ def _sync_offline_backlog():
                 item.get("workspace_id"),
             )
 
-        logs_synced = db.sync_pending_logs()
+        logs_synced = db.sincronizar_bitacoras_pendientes()
         return {"documents": uploaded, "logs": logs_synced}
     finally:
         _sync_lock.release()
 
 
-def _remove_empty_capture_directories():
+def _eliminar_directorios_captura_vacios():
     """Elimina solo directorios temporales vacíos; los folios cifrados con errores se conservan."""
     temp_root = scanner.temp_folder
     root_directory = os.path.dirname(temp_root) if os.path.basename(temp_root).startswith("session_") else temp_root

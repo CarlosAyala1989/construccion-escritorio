@@ -13,25 +13,25 @@ APP_NAME = "GobernanzaDocumental"
 
 
 # Comprueba frozen dentro de app paths.
-def is_frozen():
+def esta_empaquetada():
     return getattr(sys, "frozen", False)
 
 
 # Resuelve el directorio de recursos tanto en desarrollo como en PyInstaller.
-def resource_dir():
-    if is_frozen():
+def directorio_recursos():
+    if esta_empaquetada():
         return getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 # Resuelve la carpeta persistente de datos del usuario.
-def user_data_dir():
+def directorio_datos_usuario():
     configured = os.getenv("GOBERNANZA_DATA_DIR")
     if configured:
         return os.path.abspath(os.path.expandvars(os.path.expanduser(configured)))
 
-    if not is_frozen():
-        return os.path.join(resource_dir(), "data")
+    if not esta_empaquetada():
+        return os.path.join(directorio_recursos(), "data")
 
     if sys.platform == "win32":
         base = os.getenv("LOCALAPPDATA") or os.path.expanduser("~\\AppData\\Local")
@@ -41,8 +41,8 @@ def user_data_dir():
     return os.path.join(base, APP_NAME)
 
 
-BASE_DIR = resource_dir()
-DATA_DIR = user_data_dir()
+BASE_DIR = directorio_recursos()
+DATA_DIR = directorio_datos_usuario()
 WEB_DIR = os.path.join(BASE_DIR, "web")
 TEMPLATES_DIR = os.path.join(DATA_DIR, "templates")
 TEMP_WORKSPACE_DIR = os.path.join(DATA_DIR, "temp_workspace")
@@ -53,7 +53,7 @@ CLOUD_OUTPUT_DIR = os.path.join(DATA_DIR, "cloud_output")
 
 
 # Garantiza runtime dirs dentro de app paths.
-def ensure_runtime_dirs():
+def asegurar_directorios_ejecucion():
     for path in [
         DATA_DIR,
         TEMPLATES_DIR,

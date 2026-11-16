@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import shutil
-from src.app_paths import CLOUD_OUTPUT_DIR, PROCESSED_DIR, ensure_runtime_dirs
+from src.app_paths import CLOUD_OUTPUT_DIR, PROCESSED_DIR, asegurar_directorios_ejecucion
 
 try:
     from PyPDF2 import PdfReader, PdfWriter
@@ -62,19 +62,19 @@ class CargadorNube:
 
         # Determina el proveedor a partir de cloudPath.
         if cloud_path.startswith("Google Drive:"):
-            return self._upload_gdrive(file_path, workspace)
+            return self._subir_drive(file_path, workspace)
         elif cloud_path.startswith("Dropbox:"):
-            return self._upload_dropbox(file_path, cloud_path)
+            return self._subir_dropbox(file_path, cloud_path)
         elif cloud_path.startswith("LOCAL:"):
             local_dest = cloud_path.replace("LOCAL:", "").strip()
-            return self._upload_local_dest(file_path, local_dest, workspace_name)
+            return self._subir_destino_local(file_path, local_dest, workspace_name)
         else:
-            return self._upload_local(file_path, cloud_path, workspace_name)
+            return self._subir_local(file_path, cloud_path, workspace_name)
 
     # ─── Carga en Google Drive ───────────────────────
 
     # RF-13 — Renueva credenciales, organiza carpetas y devuelve el resultado de Drive.
-    def _upload_gdrive(self, file_path, workspace):
+    def _subir_drive(self, file_path, workspace):
         """Carga un archivo en Google Drive con el token y el ID de carpeta guardados."""
         if not HAS_REQUESTS:
             return {"success": False, "error": "Librería 'requests' no disponible", "provider": "GOOGLE_DRIVE"}
@@ -109,7 +109,7 @@ class CargadorNube:
             }
 
         # Paso 1: obtiene un token de acceso vigente a partir del token de renovación.
-        access_token = self._refresh_access_token(refresh_token, client_id, client_secret)
+        access_token = self._actualizar_token_acceso(refresh_token, client_id, client_secret)
         if not access_token:
             return {
                 "success": False,
@@ -124,15 +124,15 @@ class CargadorNube:
         try:
             filename = os.path.basename(file_path)
             file_size = os.path.getsize(file_path)
-            sha256 = self._calculate_sha256(file_path)
-            relative_path = self._processed_relative_path(file_path)
+            sha256 = self._calcular_sha256(file_path)
+            relative_path = self._ruta_relativa_procesado(file_path)
             relative_folder = os.path.dirname(relative_path)
             folder_parts = [
                 part
                 for part in relative_folder.split(os.sep)
                 if part and part not in {".", ".."}
             ]
-            target_folder_id = self._ensure_gdrive_folders(
+            target_folder_id = self._asegurar_carpetas_drive(
                 folder_id,
                 folder_parts,
                 access_token,
@@ -146,9 +146,9 @@ class CargadorNube:
 
             # Usa carga multipart para archivos pequeños y reanudable para los grandes.
             if file_size < SMALL_UPLOAD_MAX_BYTES:
-                result = self._simple_upload(file_path, metadata, access_token)
+                result = self._subida_simple(file_path, metadata, access_token)
             else:
-                result = self._resumable_upload(file_path, metadata, access_token)
+                result = self._subida_reanudable(file_path, metadata, access_token)
 
             if result.get("id"):
                 stored_filename = result.get("name") or filename
@@ -176,16 +176,16 @@ class CargadorNube:
             logging.getLogger(__name__).exception("Falló la subida del archivo a Google Drive.")
             return {"success": False, "error": str(error), "provider": "GOOGLE_DRIVE"}
 
-    def _ensure_gdrive_folders(self, root_folder_id, folder_parts, access_token):
+    def _asegurar_carpetas_drive(self, root_folder_id, folder_parts, access_token):
         """Busca o crea cada carpeta debajo de la carpeta raíz del espacio."""
         current_folder_id = root_folder_id
         for folder_name in folder_parts:
-            existing_id = self._find_gdrive_folder(
+            existing_id = self._buscar_carpeta_drive(
                 current_folder_id,
                 folder_name,
                 access_token,
             )
-            current_folder_id = existing_id or self._create_gdrive_folder(
+            current_folder_id = existing_id or self._crear_carpeta_drive(
                 current_folder_id,
                 folder_name,
                 access_token,
@@ -193,9 +193,9 @@ class CargadorNube:
         return current_folder_id
 
     # RF-13 — Busca una carpeta hija existente para mantener la estructura remota.
-    def _find_gdrive_folder(self, parent_id, folder_name, access_token):
-        escaped_parent = self._escape_drive_query_value(parent_id)
-        escaped_name = self._escape_drive_query_value(folder_name)
+    def _buscar_carpeta_drive(self, parent_id, folder_name, access_token):
+        escaped_parent = self._escapar_valor_consulta_drive(parent_id)
+        escaped_name = self._escapar_valor_consulta_drive(folder_name)
         query = (
             f"'{escaped_parent}' in parents and name = '{escaped_name}' "
             f"and mimeType = '{GOOGLE_FOLDER_MIME_TYPE}' and trashed = false"
@@ -222,7 +222,7 @@ class CargadorNube:
         return files[0].get("id") if files else None
 
     # RF-13 — Crea una carpeta hija y valida que Drive devuelva su identificador.
-    def _create_gdrive_folder(self, parent_id, folder_name, access_token):
+    def _crear_carpeta_drive(self, parent_id, folder_name, access_token):
         response = http_requests.post(
             GOOGLE_FILES_URL,
             headers={"Authorization": f"Bearer {access_token}"},
@@ -249,13 +249,13 @@ class CargadorNube:
 
     # Escapa Drive query value según las reglas del componente.
     @staticmethod
-    def _escape_drive_query_value(value):
+    def _escapar_valor_consulta_drive(value):
         return str(value).replace("\\", "\\\\").replace("'", "\\'")
 
     # RF-14
-    def _resolve_gdrive_collision_name(self, parent_id, filename, access_token):
+    def _resolver_nombre_colision_drive(self, parent_id, filename, access_token):
         """Devuelve el nombre original o la primera variante _vN disponible en Drive."""
-        escaped_parent = self._escape_drive_query_value(parent_id)
+        escaped_parent = self._escapar_valor_consulta_drive(parent_id)
         page_token = None
         existing_names = set()
 
@@ -304,7 +304,7 @@ class CargadorNube:
         return candidate
 
     # RF-13 — Renueva el token OAuth y registra de forma segura los fallos de red.
-    def _refresh_access_token(self, refresh_token, client_id, client_secret):
+    def _actualizar_token_acceso(self, refresh_token, client_id, client_secret):
         """Intercambia un token de renovación por un nuevo token de acceso."""
         try:
             resp = http_requests.post(GOOGLE_TOKEN_URL, data={
@@ -329,14 +329,14 @@ class CargadorNube:
             return None
 
     # RF-13 — Sube archivos pequeños y devuelve metadatos o un error estructurado.
-    def _simple_upload(self, file_path, metadata, access_token):
+    def _subida_simple(self, file_path, metadata, access_token):
         """Carga archivos pequeños mediante una solicitud multipart."""
         import io
 
         boundary = "gobernanza_boundary_upload"
         filename = os.path.basename(file_path)
         metadata = dict(metadata)
-        metadata["name"] = self._resolve_gdrive_collision_name(
+        metadata["name"] = self._resolver_nombre_colision_drive(
             metadata["parents"][0],
             metadata["name"],
             access_token,
@@ -388,11 +388,11 @@ class CargadorNube:
             return {"error": resp.text}
 
     # RF-13 — Sube archivos grandes mediante la sesión reanudable de Google Drive.
-    def _resumable_upload(self, file_path, metadata, access_token):
+    def _subida_reanudable(self, file_path, metadata, access_token):
         """Carga archivos grandes mediante una sesión reanudable."""
         filename = os.path.basename(file_path)
         metadata = dict(metadata)
-        metadata["name"] = self._resolve_gdrive_collision_name(
+        metadata["name"] = self._resolver_nombre_colision_drive(
             metadata["parents"][0],
             metadata["name"],
             access_token,
@@ -443,7 +443,7 @@ class CargadorNube:
     # ─── Carga en destino local ──────────────────────
 
     # RF-13 — Copia el archivo al destino local y devuelve el resultado estructurado.
-    def _upload_local_dest(self, file_path, dest_path, workspace_name=None):
+    def _subir_destino_local(self, file_path, dest_path, workspace_name=None):
         """Copia el archivo en una ruta de destino local específica."""
         # Expande ~ como la ruta del directorio personal.
         dest_path = os.path.expanduser(dest_path)
@@ -453,10 +453,10 @@ class CargadorNube:
         else:
             output_dir = dest_path
 
-        relative_path = self._processed_relative_path(file_path)
+        relative_path = self._ruta_relativa_procesado(file_path)
         dest = os.path.join(output_dir, relative_path)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
-        dest = self._prevent_collision(dest)
+        dest = self._evitar_colision(dest)
 
         try:
             shutil.copy2(file_path, dest)
@@ -467,9 +467,9 @@ class CargadorNube:
             return {"success": False, "error": str(error), "provider": "LOCAL"}
 
     # RF-13 — Copia al directorio local de salida y devuelve un resultado reintentable.
-    def _upload_local(self, file_path, cloud_path, workspace_name=None):
+    def _subir_local(self, file_path, cloud_path, workspace_name=None):
         """Copia el archivo en una carpeta local que simula una carga a la nube."""
-        ensure_runtime_dirs()
+        asegurar_directorios_ejecucion()
 
         # Construye la ruta de salida.
         output_base = CLOUD_OUTPUT_DIR
@@ -480,10 +480,10 @@ class CargadorNube:
         else:
             output_dir = output_base
 
-        relative_path = self._processed_relative_path(file_path)
+        relative_path = self._ruta_relativa_procesado(file_path)
         dest = os.path.join(output_dir, relative_path)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
-        dest = self._prevent_collision(dest)
+        dest = self._evitar_colision(dest)
 
         try:
             shutil.copy2(file_path, dest)
@@ -500,7 +500,7 @@ class CargadorNube:
                 "provider": "LOCAL",
             }
 
-    def _upload_dropbox(self, file_path, cloud_path):
+    def _subir_dropbox(self, file_path, cloud_path):
         """Carga en Dropbox (marcador para una implementación futura)."""
         return {
             "success": False,
@@ -512,7 +512,7 @@ class CargadorNube:
 
     # RF-13/RF-14 — Calcula SHA-256 en bloques para identificar el contenido transferido.
     @staticmethod
-    def _calculate_sha256(file_path):
+    def _calcular_sha256(file_path):
         """Calcula la huella SHA-256 de los bytes exactos enviados al almacenamiento."""
         digest = hashlib.sha256()
         with open(file_path, "rb") as file:
@@ -521,7 +521,7 @@ class CargadorNube:
         return digest.hexdigest()
 
     @staticmethod
-    def _processed_relative_path(file_path):
+    def _ruta_relativa_procesado(file_path):
         """Devuelve una ruta segura relativa al directorio de documentos procesados."""
         root_path = os.path.abspath(PROCESSED_DIR)
         absolute_path = os.path.abspath(file_path)
@@ -540,7 +540,7 @@ class CargadorNube:
         return os.path.join(*parts) if parts else os.path.basename(file_path)
 
     # RF-14 — Evita colisiones usando la primera variante de nombre disponible.
-    def _prevent_collision(self, path):
+    def _evitar_colision(self, path):
         """Evita colisiones de nombres de archivo."""
         if not os.path.exists(path):
             return path
@@ -551,7 +551,7 @@ class CargadorNube:
         return f"{base}_v{version}{ext}"
 
     # RF-15 — Reescribe las páginas y devuelve si la compresión del PDF fue exitosa.
-    def compress_pdf(self, input_path, output_path):
+    def comprimir_pdf(self, input_path, output_path):
         """
         Comprime un PDF al volver a escribirlo (compresión básica).
         Devuelve True si la compresión finaliza correctamente.
@@ -574,7 +574,7 @@ class CargadorNube:
             return False
 
     # RF-15 — Compara el tamaño con el umbral de compresión configurable.
-    def should_compress(
+    def debe_comprimir(
         self,
         file_path,
         threshold_mb=DEFAULT_COMPRESSION_THRESHOLD_MB,

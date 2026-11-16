@@ -5,14 +5,14 @@ from subprocess import CompletedProcess
 from unittest.mock import patch
 
 from src.core.native_file_dialog import (
-    _parse_windows_selection,
-    _select_files_linux,
+    _analizar_seleccion_windows,
+    _seleccionar_archivos_linux,
 )
 
 
 class PruebasSelectorArchivosNativo(unittest.TestCase):
     # Comprueba el escenario parses windows multiple selección y sus resultados esperados.
-    def test_parses_windows_multiple_selection(self):
+    def test_analiza_seleccion_multiple_windows(self):
         raw = "C:\\Documentos\0uno.pdf\0dos.png\0\0"
 
         self.assertEqual(
@@ -20,13 +20,13 @@ class PruebasSelectorArchivosNativo(unittest.TestCase):
                 os.path.join("C:\\Documentos", "uno.pdf"),
                 os.path.join("C:\\Documentos", "dos.png"),
             ],
-            _parse_windows_selection(raw),
+            _analizar_seleccion_windows(raw),
         )
 
     # Comprueba el escenario uses zenity on gtk desktop y sus resultados esperados.
     @patch("src.core.native_file_dialog.subprocess.run")
     @patch("src.core.native_file_dialog.shutil.which")
-    def test_uses_zenity_on_gtk_desktop(self, which, run):
+    def test_utiliza_zenity_en_escritorio_gtk(self, which, run):
         which.side_effect = lambda name: f"/usr/bin/{name}" if name == "zenity" else None
         run.return_value = CompletedProcess(
             args=[],
@@ -36,7 +36,7 @@ class PruebasSelectorArchivosNativo(unittest.TestCase):
         )
 
         with patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "GNOME"}):
-            selected = _select_files_linux()
+            selected = _seleccionar_archivos_linux()
 
         self.assertEqual(["/tmp/uno.pdf", "/tmp/dos.png"], selected)
         self.assertEqual("/usr/bin/zenity", run.call_args.args[0][0])
@@ -44,7 +44,7 @@ class PruebasSelectorArchivosNativo(unittest.TestCase):
     # Comprueba el escenario uses kdialog on kde desktop y sus resultados esperados.
     @patch("src.core.native_file_dialog.subprocess.run")
     @patch("src.core.native_file_dialog.shutil.which")
-    def test_uses_kdialog_on_kde_desktop(self, which, run):
+    def test_utiliza_kdialog_en_escritorio_kde(self, which, run):
         which.side_effect = lambda name: f"/usr/bin/{name}" if name == "kdialog" else None
         run.return_value = CompletedProcess(
             args=[],
@@ -54,7 +54,7 @@ class PruebasSelectorArchivosNativo(unittest.TestCase):
         )
 
         with patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "KDE"}):
-            selected = _select_files_linux()
+            selected = _seleccionar_archivos_linux()
 
         self.assertEqual(["/tmp/uno.pdf", "/tmp/dos.png"], selected)
         self.assertEqual("/usr/bin/kdialog", run.call_args.args[0][0])

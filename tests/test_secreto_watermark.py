@@ -11,7 +11,7 @@ class PruebaIntegracionMarcaAguaSecreto(unittest.TestCase):
         "Set SECRETO_TEST_PDF to run the real document integration test.",
     )
     # Comprueba el escenario real scanned documento detects diagonal SECRETO marca de agua y sus resultados esperados.
-    def test_real_scanned_document_detects_diagonal_secreto_watermark(self):
+    def test_documento_real_detecta_marca_agua_secreto_diagonal(self):
         pdf_path = os.environ["SECRETO_TEST_PDF"]
         engine = MotorOCR()
         policy = {
@@ -20,8 +20,8 @@ class PruebaIntegracionMarcaAguaSecreto(unittest.TestCase):
             "target": "SECRETO",
         }
 
-        text = engine.extract_text_from_pdf(pdf_path)
-        matched_policy = engine.check_semantic_policies(text, [policy])
+        text = engine.extraer_texto_pdf(pdf_path)
+        matched_policy = engine.verificar_politicas_semanticas(text, [policy])
 
         self.assertIn("SECRETO", text.upper())
         self.assertEqual(policy, matched_policy)

@@ -8,7 +8,7 @@ from src.database.sqlite_manager import AdministradorBaseDatos, ErrorAutenticaci
 
 
 # Agrupa el comportamiento de fake cursor y el estado de sus operaciones.
-class FakeCursor:
+class CursorSimulado:
     # Inicializa las dependencias y el estado de esta instancia.
     def __init__(self, user):
         self.user = user
@@ -28,14 +28,14 @@ class FakeCursor:
 
 
 # Agrupa el comportamiento de fake connection y el estado de sus operaciones.
-class FakeConnection:
+class ConexionSimulada:
     # Inicializa las dependencias y el estado de esta instancia.
     def __init__(self, user):
         self.user = user
 
     # Crea un cursor aislado para la autenticación simulada.
     def cursor(self, dictionary=False):
-        return FakeCursor(self.user)
+        return CursorSimulado(self.user)
 
 
 # Agrupa el comportamiento de desktop authentication tests y el estado de sus operaciones.
@@ -56,17 +56,17 @@ class PruebasAutenticacionEscritorio(unittest.TestCase):
         }
 
     # Construye el administrador sin abrir SQLite ni MySQL reales.
-    def make_manager(self, user=None):
+    def crear_administrador(self, user=None):
         manager = object.__new__(AdministradorBaseDatos)
-        connection = FakeConnection(self.user if user is None else user)
-        manager.get_mysql = lambda: connection
+        connection = ConexionSimulada(self.user if user is None else user)
+        manager.obtener_mysql = lambda: connection
         return manager
 
     # Comprueba accepts valid contraseña and totp mediante una prueba de regresión.
-    def test_accepts_valid_password_and_totp(self):
-        manager = self.make_manager()
+    def test_acepta_contrasena_y_totp_validos(self):
+        manager = self.crear_administrador()
 
-        result = manager.authenticate_user(
+        result = manager.autenticar_usuario(
             self.user["email"],
             "correct-password",
             pyotp.TOTP(self.secret).now(),
@@ -76,23 +76,23 @@ class PruebasAutenticacionEscritorio(unittest.TestCase):
         self.assertNotIn("twoFactorSecret", result)
 
     # Comprueba rejects invalid totp mediante una prueba de regresión.
-    def test_rejects_invalid_totp(self):
-        manager = self.make_manager()
+    def test_rechaza_totp_invalido(self):
+        manager = self.crear_administrador()
 
         with self.assertRaisesRegex(ErrorAutenticacion, "inválido o vencido"):
-            manager.authenticate_user(
+            manager.autenticar_usuario(
                 self.user["email"],
                 "correct-password",
                 "12345",
             )
 
     # Comprueba rejects usuario without authenticator mediante una prueba de regresión.
-    def test_rejects_user_without_authenticator(self):
+    def test_rechaza_usuario_sin_autenticador(self):
         user = {**self.user, "twoFactorEnabled": False, "twoFactorSecret": None}
-        manager = self.make_manager(user)
+        manager = self.crear_administrador(user)
 
         with self.assertRaisesRegex(ErrorAutenticacion, "no está configurado"):
-            manager.authenticate_user(
+            manager.autenticar_usuario(
                 user["email"],
                 "correct-password",
                 "123456",

@@ -10,7 +10,7 @@ import logging
 import os
 import cv2
 import numpy as np
-from src.app_paths import TEMPLATES_DIR, ensure_runtime_dirs
+from src.app_paths import TEMPLATES_DIR, asegurar_directorios_ejecucion
 
 TEMPLATE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp")
 SUPPORTED_IMAGE_EXTENSIONS = TEMPLATE_EXTENSIONS + (".tiff",)
@@ -18,7 +18,7 @@ VISUAL_MATCH_THRESHOLD = 0.7
 FIRST_PDF_PAGE_INDEX = 0
 
 # Directorio de imágenes de plantillas visuales.
-ensure_runtime_dirs()
+asegurar_directorios_ejecucion()
 
 
 class MotorVision:
@@ -27,7 +27,7 @@ class MotorVision:
     def __init__(self):
         self.templates = {}
 
-    def load_templates(self, visual_policies):
+    def cargar_plantillas(self, visual_policies):
         """
         Carga imágenes de plantilla para cada política visual.
         Las plantillas deben guardarse en data/templates/ con el nombre del objetivo.
@@ -51,14 +51,14 @@ class MotorVision:
                         logging.getLogger(__name__).debug("Plantilla visual cargada: %s", target)
                     break
 
-    def check_visual_policies(self, image_path, policies=None):
+    def verificar_politicas_visuales(self, image_path, policies=None):
         """
         Comprueba si una imagen o página PDF coincide con las plantillas cargadas.
         Devuelve la política coincidente de mayor prioridad o None.
         """
         if not self.templates:
             if policies:
-                self.load_templates(policies)
+                self.cargar_plantillas(policies)
             if not self.templates:
                 return None
 
@@ -106,7 +106,7 @@ class MotorVision:
         matches.sort(key=lambda m: (m["policy"].get("priority", 0), m["confidence"]), reverse=True)
         return matches[0]["policy"]
 
-    def pdf_page_to_image(self, pdf_path, page_num=0):
+    def convertir_pagina_pdf_imagen(self, pdf_path, page_num=0):
         """
         Convierte una página PDF en una imagen temporal para el análisis visual.
         Devuelve la ruta de la imagen temporal o None.
@@ -154,7 +154,7 @@ class MotorVision:
 
         return None
 
-    def check_document(self, file_path, policies):
+    def verificar_documento(self, file_path, policies):
         """
         Compara un documento (PDF o imagen) con las políticas visuales.
         Devuelve la política coincidente o None.
@@ -166,18 +166,18 @@ class MotorVision:
         if not visual_policies:
             return None
 
-        self.load_templates(visual_policies)
+        self.cargar_plantillas(visual_policies)
 
         # Si es una imagen, la analiza directamente.
         ext = os.path.splitext(file_path)[1].lower()
         if ext in SUPPORTED_IMAGE_EXTENSIONS:
-            return self.check_visual_policies(file_path)
+            return self.verificar_politicas_visuales(file_path)
 
         # Si es un PDF, convierte sus páginas en imágenes y las analiza.
         if ext == ".pdf":
-            temp_img = self.pdf_page_to_image(file_path, page_num=FIRST_PDF_PAGE_INDEX)
+            temp_img = self.convertir_pagina_pdf_imagen(file_path, page_num=FIRST_PDF_PAGE_INDEX)
             if temp_img:
-                result = self.check_visual_policies(temp_img)
+                result = self.verificar_politicas_visuales(temp_img)
                 # Elimina la imagen temporal.
                 try:
                     os.remove(temp_img)

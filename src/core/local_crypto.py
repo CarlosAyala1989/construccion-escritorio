@@ -17,7 +17,7 @@ import tempfile
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 
-from src.app_paths import DATA_DIR, ensure_runtime_dirs
+from src.app_paths import DATA_DIR, asegurar_directorios_ejecucion
 
 
 LOCAL_KEY_ENV = "GOBERNANZA_LOCAL_ENCRYPTION_KEY"
@@ -31,13 +31,13 @@ class ErrorCifradoLocal(Exception):
     """El contenido local no pudo cifrarse, autenticarse o descifrarse."""
 
 
-def get_local_encryption_key():
+def obtener_clave_cifrado_local():
     """Devuelve la clave AES-256 del dispositivo y la crea atómicamente si hace falta."""
     configured_key = os.getenv(LOCAL_KEY_ENV, "").strip()
     if configured_key:
-        return _normalize_configured_key(configured_key)
+        return _normalizar_clave_configurada(configured_key)
 
-    ensure_runtime_dirs()
+    asegurar_directorios_ejecucion()
     try:
         with open(LOCAL_KEY_FILE, "rb") as key_file:
             stored_key = base64.urlsafe_b64decode(key_file.read().strip())
@@ -107,7 +107,7 @@ def get_local_encryption_key():
 
 
 # RF-16 — El cifrado autenticado conserva el contrato y evita estado global mutable.
-def encrypt_local_payload(payload):
+def cifrar_contenido_local(payload):
     """Serializa y cifra con AES-256-GCM un contenido compatible con JSON."""
     try:
         clear_bytes = json.dumps(
@@ -116,7 +116,7 @@ def encrypt_local_payload(payload):
             separators=(",", ":"),
         ).encode("utf-8")
         cipher = AES.new(
-            get_local_encryption_key(),
+            obtener_clave_cifrado_local(),
             AES.MODE_GCM,
             nonce=get_random_bytes(GCM_NONCE_BYTES),
         )
@@ -130,8 +130,8 @@ def encrypt_local_payload(payload):
 
 
 # RF-16 — La validación temprana rechaza sobres cifrados incompletos o inválidos.
-def decrypt_local_payload(value):
-    """Descifra un valor generado por :func:`encrypt_local_payload`."""
+def descifrar_contenido_local(value):
+    """Descifra un valor generado por :func:`cifrar_contenido_local`."""
     if not isinstance(value, str) or not value.startswith(ENCRYPTED_PAYLOAD_PREFIX):
         raise ErrorCifradoLocal("El contenido no usa el formato cifrado local esperado.")
 
@@ -143,7 +143,7 @@ def decrypt_local_payload(value):
         nonce = packed[:GCM_NONCE_BYTES]
         tag = packed[GCM_NONCE_BYTES:minimum_length]
         ciphertext = packed[minimum_length:]
-        cipher = AES.new(get_local_encryption_key(), AES.MODE_GCM, nonce=nonce)
+        cipher = AES.new(obtener_clave_cifrado_local(), AES.MODE_GCM, nonce=nonce)
         clear_bytes = cipher.decrypt_and_verify(ciphertext, tag)
         return json.loads(clear_bytes.decode("utf-8"))
     except ErrorCifradoLocal:
@@ -153,11 +153,11 @@ def decrypt_local_payload(value):
 
 
 # RF-16 — La detección de formato se mantiene como comprobación pura.
-def is_encrypted_local_payload(value):
+def es_contenido_local_cifrado(value):
     return isinstance(value, str) and value.startswith(ENCRYPTED_PAYLOAD_PREFIX)
 
 
-def _normalize_configured_key(configured_key):
+def _normalizar_clave_configurada(configured_key):
     """Acepta una clave Base64 de 32 bytes o la deriva de un secreto administrativo."""
     try:
         decoded = base64.urlsafe_b64decode(configured_key.encode("ascii"))

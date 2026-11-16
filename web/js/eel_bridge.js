@@ -7,7 +7,7 @@
 eel.expose(onFileDetected);
 /** Actualiza la lista visible cuando Python detecta un archivo nuevo. */
 function onFileDetected(data) {
-    console.log('[BRIDGE] File detected:', data.name);
+    console.log('[PUENTE] Archivo detectado:', data.name);
     refreshSessionFiles();
     updateDocCount();
 }
@@ -16,7 +16,7 @@ function onFileDetected(data) {
 eel.expose(onDocumentProcessed);
 /** Actualiza el progreso cuando Python termina de procesar un documento. */
 function onDocumentProcessed(data) {
-    console.log('[BRIDGE] Document processed:', data.name, 'Encryption:', data.encryption);
+    console.log('[PUENTE] Documento procesado:', data.name, 'Cifrado:', data.encryption);
     // Aquí se podría mostrar una notificación emergente.
 }
 

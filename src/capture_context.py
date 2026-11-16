@@ -67,7 +67,7 @@ def buscar_espacio_asignado(db, context: ContextoSesionEscritorio, workspace_id:
     if not context.user:
         raise ErrorContextoCaptura(ERROR_USUARIO_REQUERIDO)
 
-    assigned_workspaces = db.get_user_workspaces(context.user["id"])
+    assigned_workspaces = db.obtener_espacios_usuario(context.user["id"])
     return next(
         (workspace for workspace in assigned_workspaces if workspace.get("id") == workspace_id),
         None,

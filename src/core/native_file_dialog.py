@@ -12,19 +12,19 @@ DOCUMENT_PATTERNS = ("*.pdf", "*.png", "*.jpg", "*.jpeg", "*.tiff", "*.bmp")
 DIALOG_TITLE = "Seleccionar archivos para importar"
 
 
-def select_document_files():
+def seleccionar_archivos_documento():
     """Devuelve las rutas elegidas mediante el selector de archivos del sistema."""
     system = platform.system()
     if system == "Windows":
-        return _select_files_windows()
+        return _seleccionar_archivos_windows()
     if system == "Linux":
-        selected = _select_files_linux()
+        selected = _seleccionar_archivos_linux()
         if selected is not None:
             return selected
-    return _select_files_tk_fallback()
+    return _seleccionar_archivos_tk_alternativo()
 
 
-def _select_files_windows():
+def _seleccionar_archivos_windows():
     """Usa directamente el cuadro de apertura de Windows, sin una ventana de Tk."""
     class OpenFileName(ctypes.Structure):
         _fields_ = [
@@ -85,7 +85,7 @@ def _select_files_windows():
     )
 
     if common_dialog.GetOpenFileNameW(ctypes.byref(dialog)):
-        return _parse_windows_selection(file_buffer[:])
+        return _analizar_seleccion_windows(file_buffer[:])
 
     error_code = common_dialog.CommDlgExtendedError()
     if error_code == 0:
@@ -94,7 +94,7 @@ def _select_files_windows():
 
 
 # Interpreta windows selection dentro de native archivo dialog.
-def _parse_windows_selection(raw_selection):
+def _analizar_seleccion_windows(raw_selection):
     parts = [part for part in raw_selection.split("\0") if part]
     if len(parts) <= 1:
         return parts
@@ -102,7 +102,7 @@ def _parse_windows_selection(raw_selection):
     return [os.path.join(directory, name) for name in parts[1:]]
 
 
-def _select_files_linux():
+def _seleccionar_archivos_linux():
     """Usa el selector disponible que corresponda al entorno de escritorio Linux."""
     desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
     candidates = ["kdialog", "zenity"] if "kde" in desktop else ["zenity", "kdialog"]
@@ -153,7 +153,7 @@ def _select_files_linux():
     return None
 
 
-def _select_files_tk_fallback():
+def _seleccionar_archivos_tk_alternativo():
     """Mantiene compatibilidad con Linux sin las herramientas auxiliares de KDE o GTK."""
     import tkinter as tk
     from tkinter import filedialog

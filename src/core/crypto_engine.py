@@ -21,7 +21,7 @@ class MotorCifrado:
     """Motor para cifrar PDFs con protección por contraseña (AES-256)."""
 
     # RF-09/RF-10 — Protege el PDF con la clave jerárquica y devuelve éxito o fallo.
-    def encrypt_pdf(self, input_path, output_path, password):
+    def cifrar_pdf(self, input_path, output_path, password):
         """
         Cifra un PDF con contraseña mediante PyPDF2.
         Usa cifrado AES-256 cuando está disponible.
@@ -62,7 +62,7 @@ class MotorCifrado:
             logging.getLogger(__name__).exception("Falló el cifrado del PDF.")
             return False
 
-    def resolve_password(self, workspace, semantic_policy, visual_policy):
+    def resolver_contrasena(self, workspace, semantic_policy, visual_policy):
         """
         Resuelve qué contraseña usar según la jerarquía criptográfica.
         Orden de prioridad:
@@ -113,13 +113,13 @@ class MotorCifrado:
             "source": "Sin contraseña",
         }
 
-    def process_document(self, file_path, workspace, semantic_policy, visual_policy, output_dir):
+    def procesar_documento(self, file_path, workspace, semantic_policy, visual_policy, output_dir):
         """
         Ejecuta el flujo completo de cifrado de un documento.
         Devuelve un diccionario con los detalles del resultado.
         """
         # Resuelve la jerarquía de contraseñas.
-        resolution = self.resolve_password(workspace, semantic_policy, visual_policy)
+        resolution = self.resolver_contrasena(workspace, semantic_policy, visual_policy)
 
         if not resolution["password"]:
             return {
@@ -133,10 +133,10 @@ class MotorCifrado:
         output_path = os.path.join(output_dir, filename)
 
         # Evita sobrescribir archivos existentes.
-        output_path = self._prevent_collision(output_path)
+        output_path = self._evitar_colision(output_path)
 
         # Cifra el documento.
-        success = self.encrypt_pdf(file_path, output_path, resolution["password"])
+        success = self.cifrar_pdf(file_path, output_path, resolution["password"])
 
         return {
             "success": success,
@@ -146,7 +146,7 @@ class MotorCifrado:
         }
 
     # RF-14 — Evita colisiones eligiendo la primera variante de nombre disponible.
-    def _prevent_collision(self, file_path):
+    def _evitar_colision(self, file_path):
         """
         Prevent filename collisions by adding version suffix.
         e.g., doc1.pdf → doc1_v2.pdf → doc1_v3.pdf

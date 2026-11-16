@@ -48,7 +48,7 @@ class MotorOCR:
         self.language = os.getenv("OCR_LANG", "spa+eng")
 
     # RF-06 — Acumula texto por página y conserva el OCR visual suplementario.
-    def extract_text_from_pdf(self, pdf_path):
+    def extraer_texto_pdf(self, pdf_path):
         """Extrae texto incrustado y complementa PDFs híbridos con OCR visual."""
         page_texts = []
         if not pdf_path or not os.path.isfile(pdf_path):
@@ -71,7 +71,7 @@ class MotorOCR:
                 # Un PDF híbrido puede combinar texto seleccionable y una etiqueta
                 # de seguridad como imagen. El OCR de la primera página la incluye
                 # en la evaluación de políticas semánticas.
-                visual_text = self._ocr_from_pdf(
+                visual_text = self._aplicar_ocr_pdf(
                     pdf_path,
                     first_page=FIRST_PDF_PAGE,
                     last_page=FIRST_PDF_PAGE,
@@ -80,7 +80,7 @@ class MotorOCR:
                     text = f"{text.rstrip()}\n{visual_text.strip()}"
             else:
                 # Si el PDF no contiene texto incrustado, aplica OCR a todas sus páginas.
-                text = self._ocr_from_pdf(pdf_path)
+                text = self._aplicar_ocr_pdf(pdf_path)
         except Exception:
             logging.getLogger(__name__).exception("Falló el procesamiento OCR del PDF.")
             text = "\n".join(page_texts)
@@ -89,7 +89,7 @@ class MotorOCR:
         return self.last_text
 
     # RF-06 — Valida ruta y disponibilidad OCR antes de iniciar el reconocimiento.
-    def extract_text_from_image(self, image_path):
+    def extraer_texto_imagen(self, image_path):
         """Extrae texto de una imagen mediante Tesseract OCR."""
         if not image_path or not os.path.isfile(image_path):
             return ""
@@ -97,7 +97,7 @@ class MotorOCR:
             return ""
 
         try:
-            text = self._ocr_image(image_path)
+            text = self._aplicar_ocr_imagen(image_path)
             self.last_text = text.strip()
             return self.last_text
         except Exception:
@@ -105,7 +105,7 @@ class MotorOCR:
             return ""
 
     # RF-06 — Usa dependencias y parámetros de OCR configurados por instancia.
-    def _ocr_from_pdf(self, pdf_path, first_page=None, last_page=None):
+    def _aplicar_ocr_pdf(self, pdf_path, first_page=None, last_page=None):
         """Convierte páginas PDF en imágenes y les aplica OCR."""
         if not self.pdftoppm_cmd:
             logging.getLogger(__name__).warning("pdftoppm no está disponible para procesar el PDF.")
@@ -137,11 +137,11 @@ class MotorOCR:
 
             chunks = []
             for image_path in page_images:
-                page_text = self._ocr_image(image_path).strip()
+                page_text = self._aplicar_ocr_imagen(image_path).strip()
                 if page_text:
                     chunks.append(page_text)
 
-                watermark_text = self._ocr_watermark(image_path).strip()
+                watermark_text = self._aplicar_ocr_marca_agua(image_path).strip()
                 if (
                     watermark_text
                     and watermark_text.casefold() not in page_text.casefold()
@@ -151,7 +151,7 @@ class MotorOCR:
             return "\n".join(chunks)
 
     # RF-06 — Reutiliza el idioma y el ejecutable definidos por esta instancia.
-    def _ocr_image(self, image_path, page_segmentation_mode=None):
+    def _aplicar_ocr_imagen(self, image_path, page_segmentation_mode=None):
         """Aplica OCR a una imagen renderizada mediante Python o la CLI de Tesseract."""
         config = ""
         if page_segmentation_mode is not None:
@@ -177,7 +177,7 @@ class MotorOCR:
         return ""
 
     # RF-06 — Nombra umbrales de imagen y registra fallos sin imprimirlos.
-    def _ocr_watermark(self, image_path):
+    def _aplicar_ocr_marca_agua(self, image_path):
         """Extrae texto diagonal grande que el OCR normal podría omitir."""
         if not HAS_PYTESSERACT and not self.tesseract_cmd:
             return ""
@@ -246,7 +246,7 @@ class MotorOCR:
                     )
                     try:
                         candidate.save(candidate_path)
-                        text = self._ocr_image(
+                        text = self._aplicar_ocr_imagen(
                             candidate_path,
                             page_segmentation_mode=WATERMARK_OCR_PAGE_SEGMENTATION_MODE,
                         ).strip()
@@ -273,7 +273,7 @@ class MotorOCR:
             return ""
 
     # RF-06 — Limita cada campo con una constante y valida campos requeridos al extraer.
-    def extract_nomenclature(self, text, nomenclature_fields):
+    def extraer_nomenclatura(self, text, nomenclature_fields):
         """
         Try to extract nomenclature fields from the OCR text.
         Returns dict of {field_name: extracted_value} or None if failed.
@@ -307,7 +307,7 @@ class MotorOCR:
         return result if result else None
 
     # RF-06
-    def extract_title_hierarchy(self, text):
+    def extraer_jerarquia_titulo(self, text):
         """Extrae una jerarquía separada por barras de un título INFORME DE RIESGO."""
         if not text:
             return None
@@ -329,7 +329,7 @@ class MotorOCR:
         return hierarchy if len(hierarchy) > 1 else None
 
     # RF-07
-    def build_filename(self, nomenclature_data, separator="_"):
+    def construir_nombre_archivo(self, nomenclature_data, separator="_"):
         """Construye un nombre de archivo a partir de los datos de nomenclatura extraídos."""
         if not nomenclature_data:
             return None
@@ -340,7 +340,7 @@ class MotorOCR:
         return name + ".pdf"
 
     # RF-10
-    def check_semantic_policies(self, text, policies):
+    def verificar_politicas_semanticas(self, text, policies):
         """
         Check text against semantic security policies.
         Returns the matching policy with highest priority, or None.

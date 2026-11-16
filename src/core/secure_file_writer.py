@@ -18,7 +18,7 @@ from typing import Dict, Optional, Tuple
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 
-from src.core.local_crypto import get_local_encryption_key
+from src.core.local_crypto import obtener_clave_cifrado_local
 
 
 AES_KEY_BYTES = 32
@@ -54,14 +54,14 @@ class EscritorArchivoSeguro:
     _session_keys: Dict[str, bytes] = {}
 
     @classmethod
-    def begin_session(cls, session_id: str) -> str:
+    def iniciar_sesion_segura(cls, session_id: str) -> str:
         """Activa una sesión y crea su clave AES-256 si aún no existe."""
         normalized_session_id = str(session_id or "").strip()
         if not normalized_session_id:
             raise ErrorSesionSegura("La sesión cifrada requiere un identificador válido.")
 
         if normalized_session_id not in cls._session_keys:
-            cls._session_keys[normalized_session_id] = cls._derive_session_key(
+            cls._session_keys[normalized_session_id] = cls._derivar_clave_sesion(
                 normalized_session_id
             )
 
@@ -69,21 +69,21 @@ class EscritorArchivoSeguro:
         return normalized_session_id
 
     @classmethod
-    def deactivate_session(cls, session_id: Optional[str] = None) -> None:
+    def desactivar_sesion_segura(cls, session_id: Optional[str] = None) -> None:
         """Desactiva nuevas escrituras sin eliminar las claves todavía necesarias."""
         if session_id is None or cls._active_session_id == session_id:
             cls._active_session_id = None
 
     @classmethod
-    def write_secure(cls, source_path: str, dest_path: str) -> str:
+    def escribir_seguro(cls, source_path: str, dest_path: str) -> str:
         """Lee un archivo fuente y persiste únicamente su representación cifrada."""
         with open(source_path, "rb") as source_file:
-            return cls.write_secure_bytes(source_file.read(), dest_path)
+            return cls.escribir_bytes_seguros(source_file.read(), dest_path)
 
     @classmethod
-    def write_secure_bytes(cls, clear_bytes: bytes, dest_path: str) -> str:
+    def escribir_bytes_seguros(cls, clear_bytes: bytes, dest_path: str) -> str:
         """Cifra bytes en memoria y los escribe de forma atómica en ``dest_path``."""
-        session_id, session_key = cls._require_active_session()
+        session_id, session_key = cls._exigir_sesion_activa()
         if not isinstance(clear_bytes, (bytes, bytearray, memoryview)):
             raise TypeError("clear_bytes debe contener datos binarios.")
 
@@ -146,7 +146,7 @@ class EscritorArchivoSeguro:
                     )
 
     @classmethod
-    def read_secure(cls, file_path: str) -> bytes:
+    def leer_seguro(cls, file_path: str) -> bytes:
         """Descifra y autentica un folio temporal, devolviendo sus bytes en memoria."""
         with open(file_path, "rb") as encrypted_file:
             magic = encrypted_file.read(len(SECURE_FILE_MAGIC))
@@ -184,15 +184,15 @@ class EscritorArchivoSeguro:
         if session_key is None:
             # Las sesiones se derivan de la clave protegida del dispositivo para
             # que una corrección pendiente sobreviva al reinicio de la aplicación.
-            session_key = cls._derive_session_key(session_id)
+            session_key = cls._derivar_clave_sesion(session_id)
             cls._session_keys[session_id] = session_key
 
         cipher = AES.new(session_key, AES.MODE_GCM, nonce=nonce)
         return cipher.decrypt_and_verify(ciphertext, authentication_tag)
 
-    # Exige active sesión según las reglas del componente.
+    # Exige una sesión activa y devuelve su clave de cifrado.
     @classmethod
-    def _require_active_session(cls) -> Tuple[str, bytes]:
+    def _exigir_sesion_activa(cls) -> Tuple[str, bytes]:
         session_id = cls._active_session_id
         if not session_id:
             raise ErrorSesionSegura(
@@ -205,11 +205,11 @@ class EscritorArchivoSeguro:
 
         return session_id, session_key
 
-    # Gestiona sesión key según las reglas del componente.
+    # Deriva de forma determinista la clave asociada a la sesión.
     @staticmethod
-    def _derive_session_key(session_id: str) -> bytes:
+    def _derivar_clave_sesion(session_id: str) -> bytes:
         return hmac.new(
-            get_local_encryption_key(),
+            obtener_clave_cifrado_local(),
             f"docuzen-capture:{session_id}".encode("utf-8"),
             hashlib.sha256,
         ).digest()

@@ -20,7 +20,7 @@ EXPECTED_HIERARCHY = [
 # Agrupa el comportamiento de informe riesgo nomenclatura tests y el estado de sus operaciones.
 class PruebasNomenclaturaInformeRiesgo(unittest.TestCase):
     # Extrae la jerarquía aunque el título continúe en la línea siguiente.
-    def test_extracts_wrapped_title_hierarchy(self):
+    def test_extrae_jerarquia_titulo_envuelto(self):
         text = (
             "INFORME DE RIESGO N° 001-2022-XIV-MACREPOL-TACNA/REGPOLTAC\n"
             "/DIVOPUS-TAC /DUE/USE-SECCOMUL."
@@ -28,11 +28,11 @@ class PruebasNomenclaturaInformeRiesgo(unittest.TestCase):
 
         self.assertEqual(
             EXPECTED_HIERARCHY,
-            MotorOCR().extract_title_hierarchy(text),
+            MotorOCR().extraer_jerarquia_titulo(text),
         )
 
     # Crea carpetas y usa el último segmento como nombre del archivo.
-    def test_creates_folders_and_uses_last_segment_as_filename(self):
+    def test_crea_carpetas_y_usa_ultimo_segmento_como_nombre(self):
         with tempfile.TemporaryDirectory() as output_dir:
             output_path = EstructuradorArchivos.estructurar_jerarquia_titulo(
                 EXPECTED_HIERARCHY,
@@ -60,12 +60,12 @@ class PruebaIntegracionDocumentoRealInformeRiesgo(unittest.TestCase):
         "Set INFORME_RIESGO_TEST_PDF to run the real document test.",
     )
     # Comprueba real PDF produces expected jerarquía mediante una prueba de regresión.
-    def test_real_pdf_produces_expected_hierarchy(self):
+    def test_pdf_real_produce_jerarquia_esperada(self):
         engine = MotorOCR()
-        text = engine.extract_text_from_pdf(
+        text = engine.extraer_texto_pdf(
             os.environ["INFORME_RIESGO_TEST_PDF"],
         )
-        hierarchy = engine.extract_title_hierarchy(text)
+        hierarchy = engine.extraer_jerarquia_titulo(text)
 
         self.assertEqual(EXPECTED_HIERARCHY, hierarchy)
         with tempfile.TemporaryDirectory() as output_dir:

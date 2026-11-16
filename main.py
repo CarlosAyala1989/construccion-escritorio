@@ -21,7 +21,7 @@ import eel
 
 # Importa el controlador para registrar todas las funciones @eel.expose.
 from src import controller
-from src.app_paths import DATA_DIR, WEB_DIR, ensure_runtime_dirs
+from src.app_paths import DATA_DIR, WEB_DIR, asegurar_directorios_ejecucion
 
 LOGGER = logging.getLogger(__name__)
 
@@ -32,8 +32,8 @@ def main():
     logging.basicConfig(level=logging.INFO, format=APP_LOG_FORMAT)
     LOGGER.info("Iniciando Gobernanza Documental — Cliente de Escritorio")
 
-    ensure_runtime_dirs()
-    controller.start_background_sync()
+    asegurar_directorios_ejecucion()
+    controller.iniciar_sincronizacion_segundo_plano()
 
     # Inicializa Eel.
     eel.init(WEB_DIR)
@@ -79,7 +79,7 @@ def main():
                 except KeyboardInterrupt:
                     LOGGER.info("Cerrando aplicación.")
     finally:
-        controller.stop_background_sync()
+        controller.detener_sincronizacion_segundo_plano()
 
 
 if __name__ == "__main__":
