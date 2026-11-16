@@ -69,8 +69,6 @@ def _analizar_archivo_entorno(path):
 def _cargar_entorno():
     env = {}
     for env_path in [
-        os.path.join(REPO_ROOT, "construccion-web", ".env"),
-        os.path.join(REPO_ROOT, "construccion-web", ".env.local"),
         os.path.join(REPO_ROOT, ".env"),
         os.path.join(BASE_DIR, ".env"),
         os.path.join(DATA_DIR, ".env"),
