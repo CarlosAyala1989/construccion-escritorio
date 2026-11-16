@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.core.file_structurer import FileStructurer
+from src.core.file_structurer import EstructuradorArchivos
 from src.core.ocr_engine import OCREngine
 
 
@@ -18,8 +18,8 @@ EXPECTED_HIERARCHY = [
 
 
 # Agrupa el comportamiento de informe riesgo nomenclatura tests y el estado de sus operaciones.
-class InformeRiesgoNomenclatureTests(unittest.TestCase):
-    # Comprueba extracts wrapped title jerarquía mediante una prueba de regresión.
+class PruebasNomenclaturaInformeRiesgo(unittest.TestCase):
+    # Extrae la jerarquía aunque el título continúe en la línea siguiente.
     def test_extracts_wrapped_title_hierarchy(self):
         text = (
             "INFORME DE RIESGO N° 001-2022-XIV-MACREPOL-TACNA/REGPOLTAC\n"
@@ -31,10 +31,10 @@ class InformeRiesgoNomenclatureTests(unittest.TestCase):
             OCREngine().extract_title_hierarchy(text),
         )
 
-    # Comprueba creates carpetas and uses last segment as filename mediante una prueba de regresión.
+    # Crea carpetas y usa el último segmento como nombre del archivo.
     def test_creates_folders_and_uses_last_segment_as_filename(self):
         with tempfile.TemporaryDirectory() as output_dir:
-            output_path = FileStructurer.structure_title_hierarchy(
+            output_path = EstructuradorArchivos.estructurar_jerarquia_titulo(
                 EXPECTED_HIERARCHY,
                 output_dir,
             )
@@ -54,7 +54,7 @@ class InformeRiesgoNomenclatureTests(unittest.TestCase):
 
 
 # Agrupa el comportamiento de informe riesgo real documento integration test y el estado de sus operaciones.
-class InformeRiesgoRealDocumentIntegrationTest(unittest.TestCase):
+class PruebaIntegracionDocumentoRealInformeRiesgo(unittest.TestCase):
     @unittest.skipUnless(
         os.getenv("INFORME_RIESGO_TEST_PDF"),
         "Set INFORME_RIESGO_TEST_PDF to run the real document test.",
@@ -69,7 +69,7 @@ class InformeRiesgoRealDocumentIntegrationTest(unittest.TestCase):
 
         self.assertEqual(EXPECTED_HIERARCHY, hierarchy)
         with tempfile.TemporaryDirectory() as output_dir:
-            output_path = FileStructurer.structure_title_hierarchy(
+            output_path = EstructuradorArchivos.estructurar_jerarquia_titulo(
                 hierarchy,
                 output_dir,
             )

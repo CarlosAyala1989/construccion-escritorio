@@ -5,19 +5,19 @@ import tempfile
 import time
 import unittest
 
-from src.core.file_structurer import FileStructurer
+from src.core.file_structurer import EstructuradorArchivos
 
 
-class FileStructurerRF07Tests(unittest.TestCase):
-    # Comprueba el escenario unitaria limpia caracteres invalidos y valores vacios y sus resultados esperados.
+class PruebasEstructuradorArchivosRF07(unittest.TestCase):
+    # Limpia caracteres inválidos e impide segmentos vacíos o ascendentes.
     def test_unitaria_limpia_caracteres_invalidos_y_valores_vacios(self):
-        self.assertEqual(FileStructurer._clean_path_value("../Plan:<2026>"), "Plan2026")
-        self.assertIsNone(FileStructurer._clean_path_value("... "))
+        self.assertEqual(EstructuradorArchivos._limpiar_valor_ruta("../Plan:<2026>"), "Plan2026")
+        self.assertIsNone(EstructuradorArchivos._limpiar_valor_ruta("... "))
 
-    # Comprueba el escenario integracion crea la jerarquia y no escribe el PDF y sus resultados esperados.
+    # Crea la jerarquía sin escribir prematuramente el PDF.
     def test_integracion_crea_la_jerarquia_y_no_escribe_el_pdf(self):
         with tempfile.TemporaryDirectory() as output_dir:
-            result = FileStructurer.RenameAndStructure(
+            result = EstructuradorArchivos.renombrar_y_estructurar(
                 {"anio": "2026", "tipo": "Contrato", "folio": "001"},
                 output_dir,
             )
@@ -32,10 +32,10 @@ class FileStructurerRF07Tests(unittest.TestCase):
             self.assertTrue(os.path.isdir(os.path.dirname(expected_path)))
             self.assertFalse(os.path.exists(expected_path))
 
-    # Comprueba el escenario funcional construye nombre y carpetas desde metadatos y sus resultados esperados.
+    # Construye el nombre y las carpetas a partir de la nomenclatura.
     def test_funcional_construye_nombre_y_carpetas_desde_metadatos(self):
         with tempfile.TemporaryDirectory() as output_dir:
-            result = FileStructurer.RenameAndStructure(
+            result = EstructuradorArchivos.renombrar_y_estructurar(
                 {"entidad": "Gobernanza", "area": "Obras", "folio": "A-12"},
                 output_dir,
                 separator="-",
@@ -46,13 +46,13 @@ class FileStructurerRF07Tests(unittest.TestCase):
                 os.path.join(output_dir, "Gobernanza", "Obras", "Gobernanza-Obras-A-12.pdf"),
             )
 
-    # Comprueba el escenario rendimiento estructura doscientos cincuenta folios y sus resultados esperados.
+    # Estructura doscientos cincuenta folios dentro del límite acordado.
     def test_rendimiento_estructura_doscientos_cincuenta_folios(self):
         with tempfile.TemporaryDirectory() as output_dir:
             started_at = time.perf_counter()
 
             results = [
-                FileStructurer.RenameAndStructure(
+                EstructuradorArchivos.renombrar_y_estructurar(
                     {"lote": "2026", "expediente": f"E{folio}", "documento": f"F{folio}"},
                     output_dir,
                 )
@@ -65,10 +65,10 @@ class FileStructurerRF07Tests(unittest.TestCase):
             self.assertEqual(len(set(results)), 250)
             self.assertLess(elapsed_seconds, 10)
 
-    # Comprueba el escenario aceptacion impide que metadatos salgan de la carpeta base y sus resultados esperados.
+    # Impide que la nomenclatura construya rutas fuera de la carpeta base.
     def test_aceptacion_impide_que_metadatos_salgan_de_la_carpeta_base(self):
         with tempfile.TemporaryDirectory() as output_dir:
-            result = FileStructurer.RenameAndStructure(
+            result = EstructuradorArchivos.renombrar_y_estructurar(
                 {"area": "../externo", "folio": "0001"},
                 output_dir,
             )

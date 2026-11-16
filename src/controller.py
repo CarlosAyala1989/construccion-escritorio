@@ -16,19 +16,19 @@ from src.database.sqlite_manager import AuthenticationError, DatabaseManager
 from src.core.ocr_engine import OCREngine
 from src.core.vision_engine import VisionEngine
 from src.core.crypto_engine import CryptoEngine
-from src.core.file_structurer import FileStructurer
-from src.core.pending_tray import PendingTray
+from src.core.file_structurer import EstructuradorArchivos
+from src.core.pending_tray import BandejaPendientes
 from src.core.secure_file_writer import SECURE_FILE_MAGIC, SecureFileWriter
 from src.core.native_file_dialog import select_document_files
 from src.hardware.scanner import ScannerManager
 from src.sync.cloud_uploader import CloudUploader, DEFAULT_COMPRESSION_THRESHOLD_MB
 from src.app_paths import PROCESSED_DIR, PENDING_REVIEW_DIR, ensure_runtime_dirs
 from src.capture_context import (
-    CaptureContextError,
-    DesktopSessionContext,
-    find_assigned_workspace,
-    require_active_capture_context,
-    validate_selected_workspace,
+    ContextoSesionEscritorio,
+    ErrorContextoCaptura,
+    buscar_espacio_asignado,
+    exigir_contexto_captura_activo,
+    validar_espacio_seleccionado,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ ocr = OCREngine()
 vision = VisionEngine()
 crypto = CryptoEngine()
 scanner = ScannerManager()
-capture_context = DesktopSessionContext()
+capture_context = ContextoSesionEscritorio()
 
 ensure_runtime_dirs()
 OUTPUT_DIR = PROCESSED_DIR
@@ -119,9 +119,9 @@ def _background_sync_loop():
 # RF-03 — Devuelve un error uniforme si falta el contexto requerido para capturar.
 def _capture_guard_failure():
     try:
-        require_active_capture_context(db, capture_context)
+        exigir_contexto_captura_activo(db, capture_context)
         return None
-    except CaptureContextError as error:
+    except ErrorContextoCaptura as error:
         return {"success": False, "error": str(error)}
 
 
@@ -133,7 +133,7 @@ def login(email, password, totp_code=""):
     """Autentica a un usuario de escritorio con contraseña y TOTP en MySQL."""
     try:
         user = db.authenticate_user(email, password, totp_code)
-        capture_context.set_user(user)
+        capture_context.establecer_usuario(user)
         db.create_audit_log(
             user["id"], user["name"], "LOGIN",
             "Inicio de sesión desde escritorio", "SUCCESS"
@@ -172,7 +172,7 @@ def logout():
             "Cierre de sesión", "SUCCESS"
         )
 
-    capture_context.reset()
+    capture_context.restablecer()
     return {"success": True}
 
 
@@ -200,13 +200,13 @@ def select_workspace(workspace_id, _workspace_name=None):
         return {"success": False, "error": "Debes seleccionar un espacio de trabajo válido."}
 
     try:
-        assigned_workspace = find_assigned_workspace(db, capture_context, workspace_id)
+        assigned_workspace = buscar_espacio_asignado(db, capture_context, workspace_id)
         if not assigned_workspace:
             return {"success": False, "error": "Espacio de trabajo no encontrado o sin permisos vigentes."}
 
-        capture_context.set_workspace(assigned_workspace)
+        capture_context.establecer_espacio_trabajo(assigned_workspace)
         return {"success": True, "workspace": assigned_workspace}
-    except CaptureContextError as error:
+    except ErrorContextoCaptura as error:
         return {"success": False, "error": str(error)}
 
 
@@ -216,12 +216,12 @@ def select_workspace(workspace_id, _workspace_name=None):
 @eel.expose
 def start_session():
     """Inicia una sesión de escaneo solo tras volver a validar el espacio seleccionado."""
-    if capture_context.has_active_session:
+    if capture_context.tiene_sesion_activa:
         return {"success": False, "error": "Ya existe una sesión de escaneo activa."}
 
     try:
-        workspace = validate_selected_workspace(db, capture_context)
-    except CaptureContextError as error:
+        workspace = validar_espacio_seleccionado(db, capture_context)
+    except ErrorContextoCaptura as error:
         return {"success": False, "error": str(error)}
 
     try:
@@ -230,7 +230,7 @@ def start_session():
             workspace["id"],
             workspace["name"]
         )
-        capture_context.start_session(session_id)
+        capture_context.iniciar_sesion(session_id)
 
         scanner.on_file_callback = _on_file_detected
         scanner.start_watching()
@@ -248,7 +248,7 @@ def start_session():
         }
     except Exception as error:
         session_id = capture_context.session_id
-        capture_context.end_session()
+        capture_context.finalizar_sesion()
         if session_id:
             try:
                 scanner.stop_watching()
@@ -294,7 +294,7 @@ def end_session():
     # Sincroniza las bitácoras pendientes.
     synced = db.sync_pending_logs()
 
-    capture_context.end_session()
+    capture_context.finalizar_sesion()
     return {
         "success": True,
         "processed": result["processed"],
@@ -537,7 +537,7 @@ def get_app_status():
         "online": online,
         "user": capture_context.user,
         "workspace": capture_context.workspace,
-        "session_active": capture_context.has_active_session,
+        "session_active": capture_context.tiene_sesion_activa,
         "session_id": capture_context.session_id,
         "watch_folder": scanner.watch_folder,
         "temp_folder": scanner.temp_folder,
@@ -657,13 +657,13 @@ def _process_single_document(file_path, workspace_id=None, corrected_name=None):
         if corrected_name:
             structured_path = os.path.join(OUTPUT_DIR, corrected_name)
         elif title_hierarchy:
-            structured_path = FileStructurer.structure_title_hierarchy(
+            structured_path = EstructuradorArchivos.estructurar_jerarquia_titulo(
                 title_hierarchy,
                 OUTPUT_DIR,
             )
         elif nomenclature_data:
             separator = nomenclatures[0].get("separator", "_") if nomenclatures else "_"
-            structured_path = FileStructurer.RenameAndStructure(
+            structured_path = EstructuradorArchivos.renombrar_y_estructurar(
                 nomenclature_data,
                 OUTPUT_DIR,
                 separator,
@@ -899,7 +899,7 @@ def _process_all_pending():
             elif result.get("needs_review"):
                 pending_path = item["file_path"]
                 if not os.path.abspath(pending_path).startswith(os.path.abspath(PENDING_DIR) + os.sep):
-                    moved_path = PendingTray.HandleOCRFailure(item["file_path"], PENDING_DIR)
+                    moved_path = BandejaPendientes.manejar_fallo_ocr(item["file_path"], PENDING_DIR)
                     if moved_path:
                         pending_path = moved_path
                 db.update_queue_item(

@@ -5,23 +5,23 @@ import tempfile
 import time
 import unittest
 
-from src.core.pending_tray import PendingTray
+from src.core.pending_tray import BandejaPendientes
 
 
-class PendingTrayRF08Tests(unittest.TestCase):
-    # Comprueba el escenario unitaria registra y devuelve fallo si no existe el origen y sus resultados esperados.
+class PruebasBandejaPendientesRF08(unittest.TestCase):
+    # Registra el error y no inventa una ruta si el origen no existe.
     def test_unitaria_registra_y_devuelve_fallo_si_no_existe_el_origen(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             missing_source = os.path.join(temp_dir, "no-existe.pdf")
             pending_dir = os.path.join(temp_dir, "pendientes")
 
             with self.assertLogs("src.core.pending_tray", level="ERROR"):
-                result = PendingTray.HandleOCRFailure(missing_source, pending_dir)
+                result = BandejaPendientes.manejar_fallo_ocr(missing_source, pending_dir)
 
             self.assertIsNone(result)
             self.assertTrue(os.path.isdir(pending_dir))
 
-    # Comprueba el escenario integracion mueve el archivo y conserva su contenido y sus resultados esperados.
+    # Mueve el archivo y conserva exactamente su contenido.
     def test_integracion_mueve_el_archivo_y_conserva_su_contenido(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             source_path = os.path.join(temp_dir, "origen", "folio.pdf")
@@ -30,14 +30,14 @@ class PendingTrayRF08Tests(unittest.TestCase):
             with open(source_path, "wb") as source_file:
                 source_file.write(b"contenido protegido")
 
-            destination = PendingTray.HandleOCRFailure(source_path, pending_dir)
+            destination = BandejaPendientes.manejar_fallo_ocr(source_path, pending_dir)
 
             self.assertEqual(destination, os.path.join(pending_dir, "folio.pdf"))
             self.assertFalse(os.path.exists(source_path))
             with open(destination, "rb") as pending_file:
                 self.assertEqual(pending_file.read(), b"contenido protegido")
 
-    # Comprueba el escenario funcional crea la bandeja y devuelve la ruta resultante y sus resultados esperados.
+    # Crea la bandeja cuando todavía no existe.
     def test_funcional_crea_la_bandeja_y_devuelve_la_ruta_resultante(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             source_path = os.path.join(temp_dir, "entrada", "lectura-incompleta.pdf")
@@ -46,13 +46,13 @@ class PendingTrayRF08Tests(unittest.TestCase):
             with open(source_path, "wb") as source_file:
                 source_file.write(b"folio para revision")
 
-            destination = PendingTray.HandleOCRFailure(source_path, pending_dir)
+            destination = BandejaPendientes.manejar_fallo_ocr(source_path, pending_dir)
 
             self.assertEqual(os.path.basename(destination), "lectura-incompleta.pdf")
             self.assertTrue(os.path.isfile(destination))
             self.assertFalse(os.path.exists(source_path))
 
-    # Comprueba el escenario rendimiento deriva ciento veinte colisiones sin perder archivos y sus resultados esperados.
+    # Resuelve ciento veinte colisiones sin perder archivos.
     def test_rendimiento_deriva_ciento_veinte_colisiones_sin_perder_archivos(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             pending_dir = os.path.join(temp_dir, "pendientes")
@@ -66,7 +66,7 @@ class PendingTrayRF08Tests(unittest.TestCase):
                 source_path = os.path.join(item_dir, "folio.pdf")
                 with open(source_path, "wb") as source_file:
                     source_file.write(str(index).encode("utf-8"))
-                destinations.append(PendingTray.HandleOCRFailure(source_path, pending_dir))
+                destinations.append(BandejaPendientes.manejar_fallo_ocr(source_path, pending_dir))
 
             elapsed_seconds = time.perf_counter() - started_at
 
@@ -74,7 +74,7 @@ class PendingTrayRF08Tests(unittest.TestCase):
             self.assertTrue(all(os.path.isfile(destination) for destination in destinations))
             self.assertLess(elapsed_seconds, 10)
 
-    # Comprueba el escenario aceptacion conserva el archivo existente y deriva a v2 y sus resultados esperados.
+    # Conserva el archivo existente y asigna el sufijo v2 al nuevo documento.
     def test_aceptacion_conserva_el_archivo_existente_y_deriva_a_v2(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             pending_dir = os.path.join(temp_dir, "pendientes")
@@ -88,7 +88,7 @@ class PendingTrayRF08Tests(unittest.TestCase):
             with open(source_path, "wb") as source_file:
                 source_file.write(b"nueva version")
 
-            destination = PendingTray.HandleOCRFailure(source_path, pending_dir)
+            destination = BandejaPendientes.manejar_fallo_ocr(source_path, pending_dir)
 
             self.assertEqual(destination, os.path.join(pending_dir, "folio_v2.pdf"))
             with open(existing_path, "rb") as existing_file:

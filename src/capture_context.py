@@ -6,66 +6,66 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
 
-USER_REQUIRED_ERROR = "Debes iniciar sesión primero."
-WORKSPACE_REQUIRED_ERROR = "Debes seleccionar un espacio de trabajo primero."
-WORKSPACE_NOT_ASSIGNED_ERROR = (
+ERROR_USUARIO_REQUERIDO = "Debes iniciar sesión primero."
+ERROR_ESPACIO_REQUERIDO = "Debes seleccionar un espacio de trabajo primero."
+ERROR_ESPACIO_NO_ASIGNADO = (
     "El espacio seleccionado ya no está asignado al usuario. Selecciona un espacio válido."
 )
-SESSION_REQUIRED_ERROR = "Inicia una sesión primero."
-SESSION_ALREADY_ACTIVE_ERROR = "Ya existe una sesión de escaneo activa."
-WORKSPACE_LOCKED_ERROR = "No puedes cambiar de espacio mientras exista una sesión de escaneo activa."
+ERROR_SESION_REQUERIDA = "Inicia una sesión primero."
+ERROR_SESION_YA_ACTIVA = "Ya existe una sesión de escaneo activa."
+ERROR_ESPACIO_BLOQUEADO = "No puedes cambiar de espacio mientras exista una sesión de escaneo activa."
 
 
-class CaptureContextError(Exception):
+class ErrorContextoCaptura(Exception):
     """Error esperado al incumplir una precondición del contexto de captura."""
 
 
 @dataclass
-class DesktopSessionContext:
+class ContextoSesionEscritorio:
     """Encapsula el usuario, el espacio de trabajo y la sesión activa sin exponer variables globales independientes."""
 
     user: Optional[Dict[str, Any]] = None
     workspace: Optional[Dict[str, Any]] = None
     session_id: Optional[str] = None
 
-    # Verifica activa sesión dentro de captura contexto.
+    # Indica si existe una sesión de captura activa.
     @property
-    def has_active_session(self) -> bool:
+    def tiene_sesion_activa(self) -> bool:
         return self.session_id is not None
 
-    # Restablece reset dentro de captura contexto.
-    def reset(self) -> None:
+    # Elimina el usuario, el espacio seleccionado y la sesión local.
+    def restablecer(self) -> None:
         self.user = None
         self.workspace = None
         self.session_id = None
 
-    # Establece usuario dentro de captura contexto.
-    def set_user(self, user: Dict[str, Any]) -> None:
+    # Inicia el contexto de un usuario y descarta selecciones anteriores.
+    def establecer_usuario(self, user: Dict[str, Any]) -> None:
         self.user = user
         self.workspace = None
         self.session_id = None
 
-    # Establece espacio de trabajo dentro de captura contexto.
-    def set_workspace(self, workspace: Dict[str, Any]) -> None:
-        if self.has_active_session:
-            raise CaptureContextError(WORKSPACE_LOCKED_ERROR)
+    # Selecciona un espacio siempre que la captura no haya comenzado.
+    def establecer_espacio_trabajo(self, workspace: Dict[str, Any]) -> None:
+        if self.tiene_sesion_activa:
+            raise ErrorContextoCaptura(ERROR_ESPACIO_BLOQUEADO)
         self.workspace = workspace
 
-    # Inicia sesión dentro de captura contexto.
-    def start_session(self, session_id: str) -> None:
-        if self.has_active_session:
-            raise CaptureContextError(SESSION_ALREADY_ACTIVE_ERROR)
+    # Registra el identificador de una nueva sesión de captura.
+    def iniciar_sesion(self, session_id: str) -> None:
+        if self.tiene_sesion_activa:
+            raise ErrorContextoCaptura(ERROR_SESION_YA_ACTIVA)
         self.session_id = session_id
 
-    # Gestiona sesión dentro de captura contexto.
-    def end_session(self) -> None:
+    # Finaliza la sesión sin descartar el usuario ni el espacio seleccionado.
+    def finalizar_sesion(self) -> None:
         self.session_id = None
 
 
-def find_assigned_workspace(db, context: DesktopSessionContext, workspace_id: str):
+def buscar_espacio_asignado(db, context: ContextoSesionEscritorio, workspace_id: str):
     """Devuelve el espacio solicitado solo si sigue asignado al usuario autenticado."""
     if not context.user:
-        raise CaptureContextError(USER_REQUIRED_ERROR)
+        raise ErrorContextoCaptura(ERROR_USUARIO_REQUERIDO)
 
     assigned_workspaces = db.get_user_workspaces(context.user["id"])
     return next(
@@ -74,27 +74,27 @@ def find_assigned_workspace(db, context: DesktopSessionContext, workspace_id: st
     )
 
 
-def validate_selected_workspace(db, context: DesktopSessionContext):
+def validar_espacio_seleccionado(db, context: ContextoSesionEscritorio):
     """Revalida la selección contra permisos vigentes antes de permitir captura."""
     if not context.user:
-        raise CaptureContextError(USER_REQUIRED_ERROR)
+        raise ErrorContextoCaptura(ERROR_USUARIO_REQUERIDO)
     if not context.workspace:
-        raise CaptureContextError(WORKSPACE_REQUIRED_ERROR)
+        raise ErrorContextoCaptura(ERROR_ESPACIO_REQUERIDO)
 
-    assigned_workspace = find_assigned_workspace(db, context, context.workspace["id"])
+    assigned_workspace = buscar_espacio_asignado(db, context, context.workspace["id"])
     if not assigned_workspace:
         context.workspace = None
-        raise CaptureContextError(WORKSPACE_NOT_ASSIGNED_ERROR)
+        raise ErrorContextoCaptura(ERROR_ESPACIO_NO_ASIGNADO)
 
     # Actualiza metadatos y credenciales del espacio sin permitir cambiar su identidad.
     context.workspace = assigned_workspace
     return assigned_workspace
 
 
-def require_active_capture_context(db, context: DesktopSessionContext) -> Tuple[Dict[str, Any], str]:
+def exigir_contexto_captura_activo(db, context: ContextoSesionEscritorio) -> Tuple[Dict[str, Any], str]:
     """Exige una sesión activa y un espacio vigente; devuelve ambos valores explícitamente."""
-    if not context.has_active_session:
-        raise CaptureContextError(SESSION_REQUIRED_ERROR)
+    if not context.tiene_sesion_activa:
+        raise ErrorContextoCaptura(ERROR_SESION_REQUERIDA)
 
-    workspace = validate_selected_workspace(db, context)
+    workspace = validar_espacio_seleccionado(db, context)
     return workspace, context.session_id
