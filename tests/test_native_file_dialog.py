@@ -10,7 +10,7 @@ from src.core.native_file_dialog import (
 )
 
 
-class NativeFileDialogTests(unittest.TestCase):
+class PruebasSelectorArchivosNativo(unittest.TestCase):
     # Comprueba el escenario parses windows multiple selección y sus resultados esperados.
     def test_parses_windows_multiple_selection(self):
         raw = "C:\\Documentos\0uno.pdf\0dos.png\0\0"

@@ -17,7 +17,7 @@ except ImportError:
     HAS_PYPDF2 = False
 
 
-class CryptoEngine:
+class MotorCifrado:
     """Motor para cifrar PDFs con protección por contraseña (AES-256)."""
 
     # RF-09/RF-10 — Protege el PDF con la clave jerárquica y devuelve éxito o fallo.

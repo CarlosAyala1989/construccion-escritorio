@@ -58,7 +58,7 @@ def parse_env(path: Path) -> dict[str, str]:
     return values
 
 
-# Gestiona main dentro de prepare installer env.
+# Extrae únicamente la configuración de base de datos necesaria para el instalador.
 def main() -> int:
     env_values = {}
     for source_file in SOURCE_FILES:

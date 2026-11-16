@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.sync.cloud_uploader import CloudUploader
+from src.sync.cloud_uploader import CargadorNube
 
 
 HIERARCHY = [
@@ -18,7 +18,7 @@ HIERARCHY = [
 
 
 # Agrupa el comportamiento de nube cargador jerarquía tests y el estado de sus operaciones.
-class CloudUploaderHierarchyTests(unittest.TestCase):
+class PruebasJerarquiaCargadorNube(unittest.TestCase):
     # Crea procesado archivo según las reglas del componente.
     def _create_processed_file(self, root):
         file_path = Path(root, *HIERARCHY, "USE-SECCOMUL.pdf")
@@ -31,7 +31,7 @@ class CloudUploaderHierarchyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as processed_dir:
             with tempfile.TemporaryDirectory() as destination:
                 file_path = self._create_processed_file(processed_dir)
-                uploader = CloudUploader()
+                uploader = CargadorNube()
 
                 with patch(
                     "src.sync.cloud_uploader.PROCESSED_DIR",
@@ -57,7 +57,7 @@ class CloudUploaderHierarchyTests(unittest.TestCase):
     def test_drive_upload_uses_leaf_folder_as_parent(self):
         with tempfile.TemporaryDirectory() as processed_dir:
             file_path = self._create_processed_file(processed_dir)
-            uploader = CloudUploader({
+            uploader = CargadorNube({
                 "googleClientId": "client",
                 "googleClientSecret": "secret",
             })

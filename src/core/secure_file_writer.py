@@ -29,19 +29,19 @@ SECURE_FILE_MAGIC = b"DZSF"
 SECURE_FILE_VERSION = 1
 
 
-class SecureFileWriterError(Exception):
+class ErrorEscritorArchivoSeguro(Exception):
     """Error base de la capa de almacenamiento temporal cifrado."""
 
 
-class SecureSessionError(SecureFileWriterError):
+class ErrorSesionSegura(ErrorEscritorArchivoSeguro):
     """La operación requiere una sesión criptográfica válida."""
 
 
-class SecureFileFormatError(SecureFileWriterError):
+class ErrorFormatoArchivoSeguro(ErrorEscritorArchivoSeguro):
     """El archivo no cumple el formato cifrado esperado por DocuZen."""
 
 
-class SecureFileWriter:
+class EscritorArchivoSeguro:
     """Gestiona archivos AES-256-GCM asociados a sesiones de captura.
 
     El estado criptográfico compartido permanece encapsulado en esta clase
@@ -58,7 +58,7 @@ class SecureFileWriter:
         """Activa una sesión y crea su clave AES-256 si aún no existe."""
         normalized_session_id = str(session_id or "").strip()
         if not normalized_session_id:
-            raise SecureSessionError("La sesión cifrada requiere un identificador válido.")
+            raise ErrorSesionSegura("La sesión cifrada requiere un identificador válido.")
 
         if normalized_session_id not in cls._session_keys:
             cls._session_keys[normalized_session_id] = cls._derive_session_key(
@@ -90,7 +90,7 @@ class SecureFileWriter:
         session_id_bytes = session_id.encode("utf-8")
         max_session_id_length = (1 << (SESSION_ID_LENGTH_BYTES * 8)) - 1
         if len(session_id_bytes) > max_session_id_length:
-            raise SecureSessionError("El identificador de sesión excede el tamaño permitido.")
+            raise ErrorSesionSegura("El identificador de sesión excede el tamaño permitido.")
 
         cipher = AES.new(session_key, AES.MODE_GCM, nonce=get_random_bytes(GCM_NONCE_BYTES))
         ciphertext, authentication_tag = cipher.encrypt_and_digest(bytes(clear_bytes))
@@ -151,34 +151,34 @@ class SecureFileWriter:
         with open(file_path, "rb") as encrypted_file:
             magic = encrypted_file.read(len(SECURE_FILE_MAGIC))
             if magic != SECURE_FILE_MAGIC:
-                raise SecureFileFormatError(
+                raise ErrorFormatoArchivoSeguro(
                     "El archivo temporal no tiene la cabecera cifrada esperada."
                 )
 
             version_bytes = encrypted_file.read(1)
             if len(version_bytes) != 1 or version_bytes[0] != SECURE_FILE_VERSION:
-                raise SecureFileFormatError("Versión de archivo temporal no soportada.")
+                raise ErrorFormatoArchivoSeguro("Versión de archivo temporal no soportada.")
 
             session_length_bytes = encrypted_file.read(SESSION_ID_LENGTH_BYTES)
             if len(session_length_bytes) != SESSION_ID_LENGTH_BYTES:
-                raise SecureFileFormatError("Cabecera de sesión incompleta.")
+                raise ErrorFormatoArchivoSeguro("Cabecera de sesión incompleta.")
 
             session_id_length = int.from_bytes(session_length_bytes, "big")
             session_id_bytes = encrypted_file.read(session_id_length)
             if len(session_id_bytes) != session_id_length:
-                raise SecureFileFormatError("Identificador de sesión incompleto.")
+                raise ErrorFormatoArchivoSeguro("Identificador de sesión incompleto.")
 
             try:
                 session_id = session_id_bytes.decode("utf-8")
             except UnicodeDecodeError as error:
-                raise SecureFileFormatError("Identificador de sesión inválido.") from error
+                raise ErrorFormatoArchivoSeguro("Identificador de sesión inválido.") from error
 
             nonce = encrypted_file.read(GCM_NONCE_BYTES)
             authentication_tag = encrypted_file.read(GCM_TAG_BYTES)
             ciphertext = encrypted_file.read()
 
         if len(nonce) != GCM_NONCE_BYTES or len(authentication_tag) != GCM_TAG_BYTES:
-            raise SecureFileFormatError("Cabecera criptográfica incompleta.")
+            raise ErrorFormatoArchivoSeguro("Cabecera criptográfica incompleta.")
 
         session_key = cls._session_keys.get(session_id)
         if session_key is None:
@@ -195,13 +195,13 @@ class SecureFileWriter:
     def _require_active_session(cls) -> Tuple[str, bytes]:
         session_id = cls._active_session_id
         if not session_id:
-            raise SecureSessionError(
+            raise ErrorSesionSegura(
                 "No existe una sesión cifrada activa para almacenar el folio."
             )
 
         session_key = cls._session_keys.get(session_id)
         if session_key is None:
-            raise SecureSessionError("La clave AES-256 de la sesión no está disponible.")
+            raise ErrorSesionSegura("La clave AES-256 de la sesión no está disponible.")
 
         return session_id, session_key
 

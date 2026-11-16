@@ -4,7 +4,7 @@ import unittest
 import bcrypt
 import pyotp
 
-from src.database.sqlite_manager import AuthenticationError, DatabaseManager
+from src.database.sqlite_manager import AdministradorBaseDatos, ErrorAutenticacion
 
 
 # Agrupa el comportamiento de fake cursor y el estado de sus operaciones.
@@ -13,12 +13,12 @@ class FakeCursor:
     def __init__(self, user):
         self.user = user
 
-    # Gestiona execute según las reglas del componente.
+    # Conserva la consulta para que la prueba pueda inspeccionar su resultado.
     def execute(self, query, params):
         self.query = query
         self.params = params
 
-    # Gestiona fetchone según las reglas del componente.
+    # Devuelve el único usuario preparado por la prueba.
     def fetchone(self):
         return self.user
 
@@ -33,13 +33,13 @@ class FakeConnection:
     def __init__(self, user):
         self.user = user
 
-    # Gestiona cursor según las reglas del componente.
+    # Crea un cursor aislado para la autenticación simulada.
     def cursor(self, dictionary=False):
         return FakeCursor(self.user)
 
 
 # Agrupa el comportamiento de desktop authentication tests y el estado de sus operaciones.
-class DesktopAuthenticationTests(unittest.TestCase):
+class PruebasAutenticacionEscritorio(unittest.TestCase):
     # Establece up según las reglas del componente.
     def setUp(self):
         self.secret = pyotp.random_base32()
@@ -55,9 +55,9 @@ class DesktopAuthenticationTests(unittest.TestCase):
             "twoFactorSecret": self.secret,
         }
 
-    # Gestiona manager según las reglas del componente.
+    # Construye el administrador sin abrir SQLite ni MySQL reales.
     def make_manager(self, user=None):
-        manager = object.__new__(DatabaseManager)
+        manager = object.__new__(AdministradorBaseDatos)
         connection = FakeConnection(self.user if user is None else user)
         manager.get_mysql = lambda: connection
         return manager
@@ -79,7 +79,7 @@ class DesktopAuthenticationTests(unittest.TestCase):
     def test_rejects_invalid_totp(self):
         manager = self.make_manager()
 
-        with self.assertRaisesRegex(AuthenticationError, "inválido o vencido"):
+        with self.assertRaisesRegex(ErrorAutenticacion, "inválido o vencido"):
             manager.authenticate_user(
                 self.user["email"],
                 "correct-password",
@@ -91,7 +91,7 @@ class DesktopAuthenticationTests(unittest.TestCase):
         user = {**self.user, "twoFactorEnabled": False, "twoFactorSecret": None}
         manager = self.make_manager(user)
 
-        with self.assertRaisesRegex(AuthenticationError, "no está configurado"):
+        with self.assertRaisesRegex(ErrorAutenticacion, "no está configurado"):
             manager.authenticate_user(
                 user["email"],
                 "correct-password",

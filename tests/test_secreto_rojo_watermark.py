@@ -2,17 +2,17 @@
 import os
 import unittest
 
-from src.core.ocr_engine import OCREngine
+from src.core.ocr_engine import MotorOCR
 
 
-class SecretoRojoWatermarkIntegrationTest(unittest.TestCase):
+class PruebaIntegracionMarcaAguaSecretoRojo(unittest.TestCase):
     @unittest.skipUnless(
         os.getenv("SECRETO_ROJO_TEST_PDF"),
         "Set SECRETO_ROJO_TEST_PDF to run the red watermark test.",
     )
     # Comprueba el escenario real scanned documento detects roja diagonal marca de agua y sus resultados esperados.
     def test_real_scanned_document_detects_red_diagonal_watermark(self):
-        engine = OCREngine()
+        engine = MotorOCR()
         policy = {
             "id": "secreto-rojo-test",
             "type": "SEMANTIC",

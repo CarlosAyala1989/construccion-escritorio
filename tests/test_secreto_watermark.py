@@ -2,10 +2,10 @@
 import os
 import unittest
 
-from src.core.ocr_engine import OCREngine
+from src.core.ocr_engine import MotorOCR
 
 
-class SecretoWatermarkIntegrationTest(unittest.TestCase):
+class PruebaIntegracionMarcaAguaSecreto(unittest.TestCase):
     @unittest.skipUnless(
         os.getenv("SECRETO_TEST_PDF"),
         "Set SECRETO_TEST_PDF to run the real document integration test.",
@@ -13,7 +13,7 @@ class SecretoWatermarkIntegrationTest(unittest.TestCase):
     # Comprueba el escenario real scanned documento detects diagonal SECRETO marca de agua y sus resultados esperados.
     def test_real_scanned_document_detects_diagonal_secreto_watermark(self):
         pdf_path = os.environ["SECRETO_TEST_PDF"]
-        engine = OCREngine()
+        engine = MotorOCR()
         policy = {
             "id": "secreto-test",
             "type": "SEMANTIC",

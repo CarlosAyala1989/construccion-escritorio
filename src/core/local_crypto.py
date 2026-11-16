@@ -27,7 +27,7 @@ AES_KEY_BYTES = 32
 GCM_NONCE_BYTES = 12
 
 
-class LocalCryptoError(Exception):
+class ErrorCifradoLocal(Exception):
     """El contenido local no pudo cifrarse, autenticarse o descifrarse."""
 
 
@@ -42,13 +42,13 @@ def get_local_encryption_key():
         with open(LOCAL_KEY_FILE, "rb") as key_file:
             stored_key = base64.urlsafe_b64decode(key_file.read().strip())
         if len(stored_key) != AES_KEY_BYTES:
-            raise LocalCryptoError("La clave local almacenada no tiene una longitud válida.")
+            raise ErrorCifradoLocal("La clave local almacenada no tiene una longitud válida.")
         return stored_key
     except FileNotFoundError:
         # La ausencia de clave activa la creación atómica en el siguiente bloque.
         pass
     except (ValueError, OSError) as error:
-        raise LocalCryptoError("No se pudo leer la clave de cifrado local.") from error
+        raise ErrorCifradoLocal("No se pudo leer la clave de cifrado local.") from error
 
     generated_key = get_random_bytes(AES_KEY_BYTES)
     encoded_key = base64.urlsafe_b64encode(generated_key)
@@ -98,10 +98,10 @@ def get_local_encryption_key():
                     "No se pudo retirar el archivo temporal de la clave.",
                     exc_info=True,
                 )
-        raise LocalCryptoError("No se pudo crear la clave de cifrado local.") from error
+        raise ErrorCifradoLocal("No se pudo crear la clave de cifrado local.") from error
 
     if len(generated_key) != AES_KEY_BYTES:
-        raise LocalCryptoError("La clave local almacenada no tiene una longitud válida.")
+        raise ErrorCifradoLocal("La clave local almacenada no tiene una longitud válida.")
 
     return generated_key
 
@@ -123,17 +123,17 @@ def encrypt_local_payload(payload):
         ciphertext, tag = cipher.encrypt_and_digest(clear_bytes)
         packed = cipher.nonce + tag + ciphertext
         return ENCRYPTED_PAYLOAD_PREFIX + base64.urlsafe_b64encode(packed).decode("ascii")
-    except LocalCryptoError:
+    except ErrorCifradoLocal:
         raise
     except Exception as error:
-        raise LocalCryptoError("No se pudo cifrar la información local.") from error
+        raise ErrorCifradoLocal("No se pudo cifrar la información local.") from error
 
 
 # RF-16 — La validación temprana rechaza sobres cifrados incompletos o inválidos.
 def decrypt_local_payload(value):
     """Descifra un valor generado por :func:`encrypt_local_payload`."""
     if not isinstance(value, str) or not value.startswith(ENCRYPTED_PAYLOAD_PREFIX):
-        raise LocalCryptoError("El contenido no usa el formato cifrado local esperado.")
+        raise ErrorCifradoLocal("El contenido no usa el formato cifrado local esperado.")
 
     try:
         packed = base64.urlsafe_b64decode(value[len(ENCRYPTED_PAYLOAD_PREFIX):])
@@ -146,10 +146,10 @@ def decrypt_local_payload(value):
         cipher = AES.new(get_local_encryption_key(), AES.MODE_GCM, nonce=nonce)
         clear_bytes = cipher.decrypt_and_verify(ciphertext, tag)
         return json.loads(clear_bytes.decode("utf-8"))
-    except LocalCryptoError:
+    except ErrorCifradoLocal:
         raise
     except Exception as error:
-        raise LocalCryptoError("La información local cifrada no pudo autenticarse.") from error
+        raise ErrorCifradoLocal("La información local cifrada no pudo autenticarse.") from error
 
 
 # RF-16 — La detección de formato se mantiene como comprobación pura.

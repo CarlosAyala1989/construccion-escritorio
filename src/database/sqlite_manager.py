@@ -117,7 +117,7 @@ def _mysql_config_from_env():
     }
 
 
-class AuthenticationError(Exception):
+class ErrorAutenticacion(Exception):
     """Fallo de autenticación esperado que puede mostrarse al usuario."""
 
 
@@ -141,7 +141,7 @@ def _verify_totp_code(secret, code):
         return False
 
 
-class DatabaseManager:
+class AdministradorBaseDatos:
     """Administra la base de datos de una instancia de la aplicación de escritorio."""
 
     # RF-13/RF-17 — Aísla configuración y conexiones al ciclo de vida de esta instancia.
@@ -310,24 +310,24 @@ class DatabaseManager:
         cursor.close()
 
         if not user:
-            raise AuthenticationError("Credenciales inválidas o cuenta desactivada.")
+            raise ErrorAutenticacion("Credenciales inválidas o cuenta desactivada.")
         if not user["isActive"]:
-            raise AuthenticationError("Credenciales inválidas o cuenta desactivada.")
+            raise ErrorAutenticacion("Credenciales inválidas o cuenta desactivada.")
         if user.get("accessRole") != "DESKTOP_SCANNER":
-            raise AuthenticationError("Esta cuenta no tiene acceso a la aplicación de escritorio.")
+            raise ErrorAutenticacion("Esta cuenta no tiene acceso a la aplicación de escritorio.")
 
         # Verifica la contraseña con bcrypt.
         if not bcrypt.checkpw(password.encode("utf-8"), user["password"].encode("utf-8")):
-            raise AuthenticationError("Credenciales inválidas o cuenta desactivada.")
+            raise ErrorAutenticacion("Credenciales inválidas o cuenta desactivada.")
 
         if not user.get("twoFactorEnabled") or not user.get("twoFactorSecret"):
-            raise AuthenticationError(
+            raise ErrorAutenticacion(
                 "Authenticator no está configurado para esta cuenta. "
                 "Solicita al administrador activarlo."
             )
 
         if not _verify_totp_code(user["twoFactorSecret"], totp_code):
-            raise AuthenticationError("Código de Authenticator inválido o vencido.")
+            raise ErrorAutenticacion("Código de Authenticator inválido o vencido.")
 
         return {
             "id": user["id"],

@@ -37,7 +37,7 @@ MIN_WATERMARK_WORD_LENGTH = 4
 WATERMARK_MORPHOLOGY_KERNEL_SIZE = 5
 
 
-class OCREngine:
+class MotorOCR:
     """Motor para extraer texto de PDFs e imágenes."""
 
     # RF-06 — Configura las herramientas OCR por instancia, sin estado mutable global.

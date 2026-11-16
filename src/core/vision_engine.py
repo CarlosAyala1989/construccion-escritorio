@@ -21,7 +21,7 @@ FIRST_PDF_PAGE_INDEX = 0
 ensure_runtime_dirs()
 
 
-class VisionEngine:
+class MotorVision:
     """Motor de detección de seguridad visual mediante coincidencia de plantillas OpenCV."""
 
     def __init__(self):

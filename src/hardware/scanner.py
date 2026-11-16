@@ -13,7 +13,7 @@ import time
 import uuid
 
 from src.app_paths import DATA_DIR, TEMP_WORKSPACE_DIR, WATCH_DIR, ensure_runtime_dirs
-from src.core.secure_file_writer import SecureFileWriter
+from src.core.secure_file_writer import EscritorArchivoSeguro
 
 try:
     from watchdog.observers import Observer
@@ -40,7 +40,7 @@ WIA_COLOR_MODE = 1
 WIA_FILE_FORMAT_PDF = 4
 
 
-class PDFHandler(FileSystemEventHandler):
+class ManejadorPDF(FileSystemEventHandler):
     """Observa la carpeta de entrada y deriva los documentos terminados al escáner."""
 
     def __init__(self, callback):
@@ -61,7 +61,7 @@ class PDFHandler(FileSystemEventHandler):
             self.callback(event.src_path)
 
 
-class ScannerManager:
+class AdministradorEscaner:
     """Gestiona ingesta y captura física dentro de un contexto temporal cifrado."""
 
     def __init__(self, on_file_callback=None):
@@ -93,7 +93,7 @@ class ScannerManager:
             )
             return False
 
-        handler = PDFHandler(self._on_new_file)
+        handler = ManejadorPDF(self._on_new_file)
         self._observer = Observer()
         self._observer.schedule(handler, WATCH_DIR, recursive=False)
         self._observer.daemon = True
@@ -128,7 +128,7 @@ class ScannerManager:
             logging.getLogger(__name__).info("Se detuvo el monitoreo de la carpeta.")
 
         if self._capture_storage_active:
-            SecureFileWriter.deactivate_session(self._secure_session_id)
+            EscritorArchivoSeguro.deactivate_session(self._secure_session_id)
             self._capture_storage_active = False
 
     # RF-05 — Pausa la ingesta sin borrar folios y devuelve su estado al llamador.
@@ -205,7 +205,7 @@ class ScannerManager:
 
         os.makedirs(session_temp_dir, mode=0o700, exist_ok=False)
         try:
-            SecureFileWriter.begin_session(secure_session_id)
+            EscritorArchivoSeguro.begin_session(secure_session_id)
         except Exception:
             try:
                 shutil.rmtree(session_temp_dir)
@@ -239,7 +239,7 @@ class ScannerManager:
     # RF-04 — Persiste el archivo fuente cifrado dentro de la sesión activa.
     def _secure_source_file(self, source_path):
         destination = self._secure_destination(source_path)
-        SecureFileWriter.write_secure(source_path, destination)
+        EscritorArchivoSeguro.write_secure(source_path, destination)
         return destination
 
     # RF-04/RF-05 — Encola durante pausas o procesa el archivo detectado.
@@ -377,7 +377,7 @@ class ScannerManager:
                 pdf_buffer = BytesIO()
                 rgb_image.save(pdf_buffer, "PDF")
 
-            SecureFileWriter.write_secure_bytes(pdf_buffer.getvalue(), scan_path)
+            EscritorArchivoSeguro.write_secure_bytes(pdf_buffer.getvalue(), scan_path)
             logging.getLogger(__name__).info(
                 "Escaneo convertido en memoria y almacenado cifrado: %s",
                 os.path.basename(scan_path),
@@ -509,7 +509,7 @@ class ScannerManager:
                         error,
                     )
 
-        SecureFileWriter.deactivate_session(self._secure_session_id)
+        EscritorArchivoSeguro.deactivate_session(self._secure_session_id)
         self._capture_storage_active = False
         self._secure_session_id = None
         self._session_temp_dir = None

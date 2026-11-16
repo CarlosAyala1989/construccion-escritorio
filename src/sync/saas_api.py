@@ -13,7 +13,7 @@ HTTP_CREATED = 201
 HTTP_FORBIDDEN = 403
 
 
-class SaaSAPIClient:
+class ClienteAPISaaS:
     """Cliente HTTP para comunicarse con el backend SaaS de Next.js."""
 
     def __init__(self, base_url="http://localhost:3000", token=None):

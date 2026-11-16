@@ -42,7 +42,7 @@ DEFAULT_COMPRESSION_THRESHOLD_MB = 10
 BYTES_PER_MEGABYTE = 1024 * 1024
 
 
-class CloudUploader:
+class CargadorNube:
     """
     Gestiona la carga de documentos en destinos de nube.
     Usa el patrón Strategy para admitir distintos proveedores.
@@ -417,11 +417,11 @@ class CloudUploader:
         )
 
         if init_resp.status_code != HTTP_OK:
-            return {"error": f"Resumable init failed: {init_resp.text}"}
+            return {"error": f"No se pudo iniciar la carga reanudable: {init_resp.text}"}
 
         upload_url = init_resp.headers.get("Location")
         if not upload_url:
-            return {"error": "No upload URL returned"}
+            return {"error": "El servicio no devolvió la URL de carga"}
 
         # Paso 2: envía el archivo.
         file_size = os.path.getsize(file_path)
@@ -438,7 +438,7 @@ class CloudUploader:
         if resp.status_code in (HTTP_OK, HTTP_CREATED):
             return resp.json()
         else:
-            return {"error": f"Resumable upload failed: {resp.text}"}
+            return {"error": f"Falló la carga reanudable: {resp.text}"}
 
     # ─── Carga en destino local ──────────────────────
 
@@ -504,7 +504,7 @@ class CloudUploader:
         """Carga en Dropbox (marcador para una implementación futura)."""
         return {
             "success": False,
-            "error": "Dropbox upload not yet implemented. Use manual upload.",
+            "error": "La carga a Dropbox aún no está implementada. Usa la carga manual.",
             "provider": "DROPBOX",
         }
 

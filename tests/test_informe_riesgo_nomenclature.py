@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from src.core.file_structurer import EstructuradorArchivos
-from src.core.ocr_engine import OCREngine
+from src.core.ocr_engine import MotorOCR
 
 
 EXPECTED_HIERARCHY = [
@@ -28,7 +28,7 @@ class PruebasNomenclaturaInformeRiesgo(unittest.TestCase):
 
         self.assertEqual(
             EXPECTED_HIERARCHY,
-            OCREngine().extract_title_hierarchy(text),
+            MotorOCR().extract_title_hierarchy(text),
         )
 
     # Crea carpetas y usa el último segmento como nombre del archivo.
@@ -61,7 +61,7 @@ class PruebaIntegracionDocumentoRealInformeRiesgo(unittest.TestCase):
     )
     # Comprueba real PDF produces expected jerarquía mediante una prueba de regresión.
     def test_real_pdf_produces_expected_hierarchy(self):
-        engine = OCREngine()
+        engine = MotorOCR()
         text = engine.extract_text_from_pdf(
             os.environ["INFORME_RIESGO_TEST_PDF"],
         )

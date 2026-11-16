@@ -12,16 +12,16 @@ import json
 import shutil
 import tempfile
 
-from src.database.sqlite_manager import AuthenticationError, DatabaseManager
-from src.core.ocr_engine import OCREngine
-from src.core.vision_engine import VisionEngine
-from src.core.crypto_engine import CryptoEngine
+from src.database.sqlite_manager import AdministradorBaseDatos, ErrorAutenticacion
+from src.core.ocr_engine import MotorOCR
+from src.core.vision_engine import MotorVision
+from src.core.crypto_engine import MotorCifrado
 from src.core.file_structurer import EstructuradorArchivos
 from src.core.pending_tray import BandejaPendientes
-from src.core.secure_file_writer import SECURE_FILE_MAGIC, SecureFileWriter
+from src.core.secure_file_writer import SECURE_FILE_MAGIC, EscritorArchivoSeguro
 from src.core.native_file_dialog import select_document_files
-from src.hardware.scanner import ScannerManager
-from src.sync.cloud_uploader import CloudUploader, DEFAULT_COMPRESSION_THRESHOLD_MB
+from src.hardware.scanner import AdministradorEscaner
+from src.sync.cloud_uploader import CargadorNube, DEFAULT_COMPRESSION_THRESHOLD_MB
 from src.app_paths import PROCESSED_DIR, PENDING_REVIEW_DIR, ensure_runtime_dirs
 from src.capture_context import (
     ContextoSesionEscritorio,
@@ -37,11 +37,11 @@ MIN_SYNC_INTERVAL_SECONDS = 5
 DEFAULT_SYNC_INTERVAL_SECONDS = 15
 
 # ─── Servicios / contexto de ejecución ────────────────
-db = DatabaseManager()
-ocr = OCREngine()
-vision = VisionEngine()
-crypto = CryptoEngine()
-scanner = ScannerManager()
+db = AdministradorBaseDatos()
+ocr = MotorOCR()
+vision = MotorVision()
+crypto = MotorCifrado()
+scanner = AdministradorEscaner()
 capture_context = ContextoSesionEscritorio()
 
 ensure_runtime_dirs()
@@ -139,7 +139,7 @@ def login(email, password, totp_code=""):
             "Inicio de sesión desde escritorio", "SUCCESS"
         )
         return {"success": True, "user": user}
-    except AuthenticationError as error:
+    except ErrorAutenticacion as error:
         return {"success": False, "error": str(error)}
     except Exception as error:
         LOGGER.exception("Falló el inicio de sesión del cliente de escritorio.")
@@ -629,7 +629,7 @@ def _process_single_document(file_path, workspace_id=None, corrected_name=None):
                 magic = source_file.read(len(SECURE_FILE_MAGIC))
 
             if magic == SECURE_FILE_MAGIC:
-                clear_file.write(SecureFileWriter.read_secure(file_path))
+                clear_file.write(EscritorArchivoSeguro.read_secure(file_path))
             else:
                 # Compatibilidad con colas creadas antes de RF-04.
                 with open(file_path, "rb") as source_file:
@@ -676,7 +676,7 @@ def _process_single_document(file_path, workspace_id=None, corrected_name=None):
                 "needs_review": True,
             }
 
-        # RF-10: CryptoEngine siempre prioriza VISUAL, luego SEMANTIC y DEFAULT.
+        # RF-10: el motor de cifrado prioriza VISUAL, luego SEMANTIC y DEFAULT.
         semantic_policy = ocr.check_semantic_policies(text, policies)
         visual_policy = vision.check_document(clear_path, policies)
         encryption_result = crypto.resolve_password(workspace, semantic_policy, visual_policy)
@@ -691,7 +691,7 @@ def _process_single_document(file_path, workspace_id=None, corrected_name=None):
         # protegido no puede modificarse después sin volver a abrirlo explícitamente.
         compressed = False
         source_for_encryption = processing_pdf_path
-        compression = CloudUploader(config)
+        compression = CargadorNube(config)
         if config.get("compressionEnabled"):
             threshold = config.get(
                 "compressionThresholdMb",
@@ -817,7 +817,7 @@ def _process_all_pending():
     google_creds = db.get_google_credentials()
     # Combina las credenciales de Google con la configuración del cargador.
     merged_config = {**config, **google_creds}
-    active_uploader = CloudUploader(merged_config)
+    active_uploader = CargadorNube(merged_config)
 
     pending = db.get_queue_items(status="PENDING")
     processed = 0
@@ -985,7 +985,7 @@ def _sync_offline_backlog():
     try:
         config = db.get_config()
         merged_config = {**config, **db.get_google_credentials()}
-        active_uploader = CloudUploader(merged_config)
+        active_uploader = CargadorNube(merged_config)
         uploaded = 0
 
         for item in db.get_queue_items(status="PROCESSED"):

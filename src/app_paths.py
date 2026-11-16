@@ -17,14 +17,14 @@ def is_frozen():
     return getattr(sys, "frozen", False)
 
 
-# Gestiona dir dentro de app paths.
+# Resuelve el directorio de recursos tanto en desarrollo como en PyInstaller.
 def resource_dir():
     if is_frozen():
         return getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-# Gestiona datos dir dentro de app paths.
+# Resuelve la carpeta persistente de datos del usuario.
 def user_data_dir():
     configured = os.getenv("GOBERNANZA_DATA_DIR")
     if configured:

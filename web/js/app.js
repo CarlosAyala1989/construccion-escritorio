@@ -183,7 +183,7 @@ async function handleStartSession() {
     }
 }
 
-/** Gestiona end sesión desde la interfaz, coordinando sus resultados visibles. */
+/** Finaliza la sesión y presenta el resumen devuelto por el controlador. */
 async function handleEndSession() {
     if (!confirm('¿Cerrar la sesión? Se procesarán y subirán todos los documentos pendientes.')) return;
 
@@ -282,7 +282,7 @@ function closeScannerModal() {
     document.getElementById('scannerModal').classList.add('hidden');
 }
 
-/** Gestiona escaneo desde la interfaz, coordinando sus resultados visibles. */
+/** Ejecuta la captura física y refleja cualquier pausa del escáner. */
 async function executeScan() {
     closeScannerModal();
     
@@ -347,7 +347,7 @@ function updateCapturePauseState(paused, reason) {
     if (scanButton) scanButton.disabled = capturePaused;
 }
 
-/** Gestiona export archivos desde la interfaz, coordinando sus resultados visibles. */
+/** Exporta los archivos procesados a la ubicación elegida por el usuario. */
 async function handleExportFiles() {
     try {
         const result = await eel.export_files()();
@@ -435,7 +435,7 @@ async function refreshPendingReview() {
     } catch (e) { /* Ignora el error de actualización. */ }
 }
 
-/** Actualiza queue desde la interfaz, coordinando sus resultados visibles. */
+/** Actualiza la tabla con el estado persistido de la cola local. */
 async function refreshQueue() {
     try {
         const items = await eel.get_queue_items()();
@@ -479,7 +479,7 @@ function updateDocCount(count) {
     }
 }
 
-/** Formatea size desde la interfaz, coordinando sus resultados visibles. */
+/** Convierte una cantidad de bytes en una unidad legible. */
 function formatSize(bytes) {
     if (!bytes) return '0 B';
     const units = ['B', 'KB', 'MB', 'GB'];
@@ -492,7 +492,7 @@ function openCorrection(id, name, error) {
     window.open(`correction.html?id=${id}&name=${encodeURIComponent(name)}&error=${encodeURIComponent(error)}`, '_blank', 'width=650,height=450');
 }
 
-/** Restablece to panel desde la interfaz, coordinando sus resultados visibles. */
+/** Restablece el panel para comenzar una nueva sesión. */
 function resetToDashboard() {
     document.getElementById('panelResults').classList.add('hidden');
     document.getElementById('panelWorkspaces').classList.remove('hidden');
