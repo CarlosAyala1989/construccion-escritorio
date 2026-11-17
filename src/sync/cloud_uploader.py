@@ -36,6 +36,8 @@ GOOGLE_FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
 DRIVE_SHA256_PROPERTY = "sha256"
 DRIVE_OPERATION_PROPERTY = "docuzenOperationId"
 GOOGLE_API_TIMEOUT_SECONDS = 30
+DRIVE_RESUMABLE_CHUNK_BYTES = 8 * 1024 * 1024
+DRIVE_RESUMABLE_MAX_RECOVERIES = 4
 HTTP_OK = 200
 HTTP_CREATED = 201
 SMALL_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
@@ -471,7 +473,7 @@ class CargadorNube:
 
     # RF-13 — Sube archivos grandes mediante la sesión reanudable de Google Drive.
     def _subida_reanudable(self, file_path, metadata, access_token):
-        """Carga archivos grandes mediante una sesión reanudable."""
+        """Carga por fragmentos y recupera el offset confirmado por Drive."""
         filename = os.path.basename(file_path)
         metadata = dict(metadata)
         metadata["name"] = self._resolver_nombre_colision_drive(
@@ -488,39 +490,139 @@ class CargadorNube:
         }
         mime_type = mime_map.get(ext, "application/octet-stream")
 
-        # Paso 1: inicia la carga.
-        init_resp = http_requests.post(
+        file_size = os.path.getsize(file_path)
+        upload_url = self._iniciar_sesion_reanudable(
+            metadata, access_token, mime_type, file_size
+        )
+        if not upload_url:
+            return {"error": "No se pudo iniciar la carga reanudable."}
+
+        offset = 0
+        recoveries = 0
+        restarted_expired_session = False
+        operation_id = metadata.get("appProperties", {}).get(DRIVE_OPERATION_PROPERTY)
+        parent_id = metadata.get("parents", [None])[0]
+
+        with open(file_path, "rb") as source:
+            while offset < file_size:
+                source.seek(offset)
+                chunk = source.read(min(DRIVE_RESUMABLE_CHUNK_BYTES, file_size - offset))
+                end = offset + len(chunk) - 1
+                try:
+                    response = http_requests.put(
+                        upload_url,
+                        headers={
+                            "Content-Type": mime_type,
+                            "Content-Length": str(len(chunk)),
+                            "Content-Range": f"bytes {offset}-{end}/{file_size}",
+                        },
+                        data=chunk,
+                        timeout=GOOGLE_API_TIMEOUT_SECONDS,
+                    )
+                except Exception:
+                    response = None
+
+                if response is not None and response.status_code in (HTTP_OK, HTTP_CREATED):
+                    return response.json()
+                if response is not None and response.status_code == 308:
+                    confirmed_offset = self._offset_confirmado_drive(response, file_size)
+                    recoveries = 0 if confirmed_offset > offset else recoveries + 1
+                    if recoveries > DRIVE_RESUMABLE_MAX_RECOVERIES:
+                        return {"error": "Drive no confirmó progreso en la carga reanudable."}
+                    offset = confirmed_offset
+                    continue
+
+                expired = response is not None and response.status_code in (404, 410)
+                if expired and not restarted_expired_session:
+                    if operation_id and parent_id:
+                        existing = self._buscar_archivo_por_operacion_drive(
+                            parent_id, operation_id, access_token
+                        )
+                        if existing:
+                            return existing
+                    upload_url = self._iniciar_sesion_reanudable(
+                        metadata, access_token, mime_type, file_size
+                    )
+                    if not upload_url:
+                        return {"error": "La sesión caducó y no pudo reiniciarse."}
+                    restarted_expired_session = True
+                    offset = 0
+                    continue
+
+                recoveries += 1
+                if recoveries > DRIVE_RESUMABLE_MAX_RECOVERIES:
+                    return {"error": "La carga reanudable excedió los intentos de recuperación."}
+                status = self._consultar_sesion_reanudable(upload_url, file_size)
+                if status.get("complete"):
+                    return status["payload"]
+                if status.get("expired"):
+                    if restarted_expired_session:
+                        return {"error": "La sesión reanudable caducó nuevamente."}
+                    if operation_id and parent_id:
+                        existing = self._buscar_archivo_por_operacion_drive(
+                            parent_id, operation_id, access_token
+                        )
+                        if existing:
+                            return existing
+                    upload_url = self._iniciar_sesion_reanudable(
+                        metadata, access_token, mime_type, file_size
+                    )
+                    if not upload_url:
+                        return {"error": "La sesión caducó y no pudo reiniciarse."}
+                    restarted_expired_session = True
+                    offset = 0
+                    continue
+                if "offset" not in status:
+                    return {"error": "No se pudo recuperar el estado de la carga reanudable."}
+                offset = status["offset"]
+
+        return {"error": "Drive no confirmó la carga reanudable."}
+
+    def _iniciar_sesion_reanudable(self, metadata, access_token, mime_type, file_size):
+        response = http_requests.post(
             f"{GOOGLE_UPLOAD_URL}?uploadType=resumable&supportsAllDrives=true",
             headers={
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json; charset=UTF-8",
+                "X-Upload-Content-Type": mime_type,
+                "X-Upload-Content-Length": str(file_size),
             },
             json=metadata,
+            timeout=GOOGLE_API_TIMEOUT_SECONDS,
         )
+        if response.status_code != HTTP_OK:
+            return None
+        return response.headers.get("Location")
 
-        if init_resp.status_code != HTTP_OK:
-            return {"error": f"No se pudo iniciar la carga reanudable: {init_resp.text}"}
-
-        upload_url = init_resp.headers.get("Location")
-        if not upload_url:
-            return {"error": "El servicio no devolvió la URL de carga"}
-
-        # Paso 2: envía el archivo.
-        file_size = os.path.getsize(file_path)
-        with open(file_path, "rb") as f:
-            resp = http_requests.put(
+    def _consultar_sesion_reanudable(self, upload_url, file_size):
+        """Consulta la URL opaca sin registrarla ni devolverla al llamador."""
+        try:
+            response = http_requests.put(
                 upload_url,
                 headers={
-                    "Content-Type": mime_type,
-                    "Content-Length": str(file_size),
+                    "Content-Length": "0",
+                    "Content-Range": f"bytes */{file_size}",
                 },
-                data=f,
+                data=b"",
+                timeout=GOOGLE_API_TIMEOUT_SECONDS,
             )
+        except Exception:
+            return {}
+        if response.status_code in (HTTP_OK, HTTP_CREATED):
+            return {"complete": True, "payload": response.json()}
+        if response.status_code == 308:
+            return {"offset": self._offset_confirmado_drive(response, file_size)}
+        if response.status_code in (404, 410):
+            return {"expired": True}
+        return {}
 
-        if resp.status_code in (HTTP_OK, HTTP_CREATED):
-            return resp.json()
-        else:
-            return {"error": f"Falló la carga reanudable: {resp.text}"}
+    @staticmethod
+    def _offset_confirmado_drive(response, file_size):
+        range_header = response.headers.get("Range", "")
+        match = re.fullmatch(r"bytes=0-(\d+)", range_header)
+        if not match:
+            return 0
+        return min(int(match.group(1)) + 1, file_size)
 
     # ─── Carga en destino local ──────────────────────
 
