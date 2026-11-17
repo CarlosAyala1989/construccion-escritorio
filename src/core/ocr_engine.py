@@ -33,6 +33,7 @@ MIN_WATERMARK_PIXELS = 500
 WATERMARK_ROTATION_ANGLES = (-45, 45)
 WATERMARK_CROP_BORDER = 40
 WATERMARK_OCR_PAGE_SEGMENTATION_MODE = 7
+DOCUMENT_OCR_PAGE_SEGMENTATION_MODE = 6
 MIN_WATERMARK_WORD_LENGTH = 4
 WATERMARK_MORPHOLOGY_KERNEL_SIZE = 5
 
@@ -43,6 +44,7 @@ class MotorOCR:
     # RF-06 — Configura las herramientas OCR por instancia, sin estado mutable global.
     def __init__(self):
         self.last_text = ""
+        self.last_structured_text = ""
         self.tesseract_cmd = shutil.which("tesseract")
         self.pdftoppm_cmd = shutil.which("pdftoppm")
         self.language = os.getenv("OCR_LANG", "spa+eng")
@@ -98,6 +100,10 @@ class MotorOCR:
 
         try:
             text = self._aplicar_ocr_imagen(image_path)
+            self.last_structured_text = self._aplicar_ocr_imagen(
+                image_path,
+                page_segmentation_mode=DOCUMENT_OCR_PAGE_SEGMENTATION_MODE,
+            ).strip()
             self.last_text = text.strip()
             return self.last_text
         except Exception:
@@ -136,10 +142,17 @@ class MotorOCR:
             )
 
             chunks = []
+            structured_chunks = []
             for image_path in page_images:
                 page_text = self._aplicar_ocr_imagen(image_path).strip()
+                structured_text = self._aplicar_ocr_imagen(
+                    image_path,
+                    page_segmentation_mode=DOCUMENT_OCR_PAGE_SEGMENTATION_MODE,
+                ).strip()
                 if page_text:
                     chunks.append(page_text)
+                if structured_text:
+                    structured_chunks.append(structured_text)
 
                 watermark_text = self._aplicar_ocr_marca_agua(image_path).strip()
                 if (
@@ -148,6 +161,7 @@ class MotorOCR:
                 ):
                     chunks.append(watermark_text)
 
+            self.last_structured_text = "\n".join(structured_chunks)
             return "\n".join(chunks)
 
     # RF-06 — Reutiliza el idioma y el ejecutable definidos por esta instancia.
@@ -282,7 +296,11 @@ class MotorOCR:
             return None
 
         result = {}
+        structured_upper = self.last_structured_text.upper()
+        sources = [structured_upper] if structured_upper else []
         text_upper = text.upper()
+        if text_upper not in sources:
+            sources.append(text_upper)
 
         for field in nomenclature_fields:
             field_name = field.get("fieldName", "")
@@ -293,10 +311,13 @@ class MotorOCR:
             ]
 
             extracted = None
-            for pattern in patterns:
-                match = re.search(pattern, text_upper)
-                if match:
-                    extracted = match.group(1).strip()[:MAX_EXTRACTED_FIELD_LENGTH]
+            for source in sources:
+                for pattern in patterns:
+                    match = re.search(pattern, source)
+                    if match:
+                        extracted = match.group(1).strip()[:MAX_EXTRACTED_FIELD_LENGTH]
+                        break
+                if extracted:
                     break
 
             if extracted:
