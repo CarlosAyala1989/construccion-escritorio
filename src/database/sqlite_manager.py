@@ -323,6 +323,9 @@ class AdministradorBaseDatos:
         if not conn:
             raise ConnectionError("No se pudo conectar con la base de datos.")
 
+        # Evita autenticar contra una instantánea abierta por una operación
+        # previa del mismo hilo (por ejemplo, justo después de una reasignación).
+        conn.rollback()
         cursor = conn.cursor(dictionary=True)
         cursor.execute(
             """

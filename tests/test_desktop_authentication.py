@@ -37,6 +37,10 @@ class ConexionSimulada:
     def cursor(self, dictionary=False):
         return CursorSimulado(self.user)
 
+    def rollback(self):
+        """Imita el cierre de la instantánea de lectura de mysql-connector."""
+        return None
+
 
 # Agrupa el comportamiento de desktop authentication tests y el estado de sus operaciones.
 class PruebasAutenticacionEscritorio(unittest.TestCase):
