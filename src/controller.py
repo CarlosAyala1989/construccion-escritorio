@@ -129,10 +129,41 @@ def _obtener_fallo_proteccion_captura():
 
 
 def _obtener_fallo_autenticacion():
-    """Devuelve una denegación uniforme para funciones Eel protegidas."""
-    if capture_context.user:
+    """Revalida en MySQL la autorización de toda función Eel protegida."""
+    if not capture_context.user:
+        return {"success": False, "error": "Debes iniciar sesión primero."}
+
+    try:
+        capture_context.user = db.validar_sesion_usuario(capture_context.user)
         return None
-    return {"success": False, "error": "Debes iniciar sesión primero."}
+    except (ErrorAutenticacion, ConnectionError) as error:
+        user = capture_context.user
+        session_id = capture_context.session_id
+
+        if session_id:
+            try:
+                scanner.detener_vigilancia()
+                db.cerrar_sesion(session_id)
+            except Exception as cleanup_error:
+                LOGGER.exception(
+                    "No se pudo cerrar completamente la sesión revocada: %s",
+                    cleanup_error,
+                )
+
+        try:
+            db.crear_bitacora_auditoria(
+                user["id"],
+                user["name"],
+                "AUTHORIZATION_REVOKED",
+                str(error),
+                "FAILURE",
+                capture_context.workspace.get("id") if capture_context.workspace else None,
+            )
+        except Exception as audit_error:
+            LOGGER.warning("No se pudo registrar la revocación: %s", audit_error)
+
+        capture_context.restablecer()
+        return {"success": False, "error": str(error)}
 
 
 def _obtener_elementos_cola_espacio_actual(status=None):
@@ -199,6 +230,8 @@ def logout():
 @eel.expose
 def get_current_user():
     """Devuelve el usuario que inició sesión actualmente."""
+    if _obtener_fallo_autenticacion():
+        return None
     return capture_context.user
 
 
@@ -207,7 +240,7 @@ def get_current_user():
 @eel.expose
 def get_workspaces():
     """Devuelve los espacios de trabajo asignados al usuario actual."""
-    if not capture_context.user:
+    if _obtener_fallo_autenticacion():
         return []
     return db.obtener_espacios_usuario(capture_context.user["id"])
 
@@ -216,6 +249,9 @@ def get_workspaces():
 @eel.expose
 def select_workspace(workspace_id, _workspace_name=None):
     """Selecciona un espacio asignado; no permite cambiarlo durante el escaneo."""
+    authentication_failure = _obtener_fallo_autenticacion()
+    if authentication_failure:
+        return authentication_failure
     if not workspace_id:
         return {"success": False, "error": "Debes seleccionar un espacio de trabajo válido."}
 
@@ -236,6 +272,9 @@ def select_workspace(workspace_id, _workspace_name=None):
 @eel.expose
 def start_session():
     """Inicia una sesión de escaneo solo tras volver a validar el espacio seleccionado."""
+    authentication_failure = _obtener_fallo_autenticacion()
+    if authentication_failure:
+        return authentication_failure
     if capture_context.tiene_sesion_activa:
         return {"success": False, "error": "Ya existe una sesión de escaneo activa."}
 

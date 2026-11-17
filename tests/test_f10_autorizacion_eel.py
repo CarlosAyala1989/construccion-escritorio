@@ -20,6 +20,15 @@ class PruebasAutorizacionEelF10(unittest.TestCase):
     def tearDown(self):
         controller.capture_context.restablecer()
 
+    def usuario_vigente(self, user):
+        return {
+            **user,
+            "email": user.get("email", "operador@example.com"),
+            "role": user.get("role", "EMPLOYEE"),
+            "accessRole": "DESKTOP_SCANNER",
+            "authorizationVersion": 1,
+        }
+
     def test_funciones_protegidas_deniegan_sin_login_sin_consultar_servicios(self):
         with (
             patch.object(controller.db, "get_queue_items") as queue_items,
@@ -51,6 +60,7 @@ class PruebasAutorizacionEelF10(unittest.TestCase):
         controller.capture_context.establecer_usuario({"id": "usuario-1", "name": "Operador"})
 
         with (
+            patch.object(controller.db, "validar_sesion_usuario", side_effect=self.usuario_vigente),
             patch.object(controller.scanner, "get_scanners") as get_scanners,
             patch.object(controller, "_seleccionar_directorio_exportacion") as select_directory,
         ):
@@ -70,6 +80,7 @@ class PruebasAutorizacionEelF10(unittest.TestCase):
         controller.capture_context.establecer_espacio_trabajo(workspace)
 
         with (
+            patch.object(controller.db, "validar_sesion_usuario", side_effect=self.usuario_vigente),
             patch.object(controller.db, "obtener_espacios_usuario", return_value=[workspace]),
             patch.object(controller.db, "get_queue_items", return_value=[other_item, current_item]) as queue_items,
             patch.object(controller.db, "get_config", return_value={"idioma": "es"}),
@@ -100,6 +111,7 @@ class PruebasAutorizacionEelF10(unittest.TestCase):
         scanners = [{"id": "wia-1", "name": "Escáner"}]
 
         with (
+            patch.object(controller.db, "validar_sesion_usuario", side_effect=self.usuario_vigente),
             patch.object(controller.db, "obtener_espacios_usuario", return_value=[workspace]),
             patch.object(controller.db, "esta_en_linea", return_value=True),
             patch.object(controller.db, "get_queue_items", return_value=queue_items),
@@ -133,6 +145,7 @@ class PruebasAutorizacionEelF10(unittest.TestCase):
             ]
 
             with (
+                patch.object(controller.db, "validar_sesion_usuario", side_effect=self.usuario_vigente),
                 patch.object(controller.db, "obtener_espacios_usuario", return_value=[workspace]),
                 patch.object(controller.db, "get_queue_items", return_value=items),
                 patch.object(controller, "OUTPUT_DIR", output_dir),

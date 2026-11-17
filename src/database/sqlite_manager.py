@@ -326,7 +326,7 @@ class AdministradorBaseDatos:
         cursor.execute(
             """
             SELECT id, name, email, password, role, isActive, accessRole,
-                   twoFactorEnabled, twoFactorSecret
+                   twoFactorEnabled, twoFactorSecret, authorizationVersion
             FROM User
             WHERE email = %s
             """,
@@ -360,6 +360,60 @@ class AdministradorBaseDatos:
             "name": user["name"],
             "email": user["email"],
             "role": user["role"],
+            "accessRole": user["accessRole"],
+            "authorizationVersion": user.get("authorizationVersion", 1),
+        }
+
+    def validar_sesion_usuario(self, user):
+        """Revalida en MySQL una sesión abierta; nunca usa caché para autorización."""
+        if not user or not user.get("id"):
+            raise ErrorAutenticacion("Debes iniciar sesión primero.")
+
+        conn = self.obtener_mysql()
+        if not conn:
+            raise ConnectionError("No se pudo verificar la autorización vigente.")
+
+        cursor = None
+        try:
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute(
+                """
+                SELECT id, name, email, role, isActive, accessRole,
+                       authorizationVersion
+                FROM User
+                WHERE id = %s
+                """,
+                (user["id"],),
+            )
+            current_user = cursor.fetchone()
+        except mysql.connector.Error as error:
+            raise ConnectionError(
+                "No se pudo verificar la autorización vigente."
+            ) from error
+        finally:
+            if cursor:
+                cursor.close()
+
+        revoked = (
+            not current_user
+            or not current_user.get("isActive")
+            or current_user.get("accessRole") != "DESKTOP_SCANNER"
+            or current_user.get("authorizationVersion") != user.get("authorizationVersion")
+            or current_user.get("role") != user.get("role")
+            or current_user.get("accessRole") != user.get("accessRole")
+        )
+        if revoked:
+            raise ErrorAutenticacion(
+                "Tu acceso cambió o fue revocado. Inicia sesión nuevamente."
+            )
+
+        return {
+            "id": current_user["id"],
+            "name": current_user["name"],
+            "email": current_user["email"],
+            "role": current_user["role"],
+            "accessRole": current_user["accessRole"],
+            "authorizationVersion": current_user["authorizationVersion"],
         }
 
     # ─── Espacios de trabajo ───────────────────────────
