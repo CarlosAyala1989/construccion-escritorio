@@ -356,18 +356,32 @@ class MotorOCR:
         for policy in semantic_policies:
             target = policy.get("target", "").strip().lower()
             if target and target in text_lower:
+                try:
+                    priority = int(policy.get("priority", 0))
+                except (TypeError, ValueError):
+                    priority = 0
                 # Cuenta las palabras del objetivo para ordenarlo.
                 word_count = len(target.split())
                 is_sentence = word_count > 1
                 matches.append({
                     "policy": policy,
+                    "priority": priority,
                     "word_count": word_count,
                     "is_sentence": is_sentence,
+                    "target": target,
                 })
 
         if not matches:
             return None
 
-        # Ordena primero por mayor cantidad de palabras y luego prioriza frases.
-        matches.sort(key=lambda m: (m["word_count"], m["is_sentence"]), reverse=True)
+        # La prioridad administrativa gobierna la selección. En empate conserva la
+        # compatibilidad histórica favoreciendo el objetivo más específico y usa
+        # identidad/objetivo como desempate estable, independiente del orden SQL.
+        matches.sort(key=lambda match: (
+            -match["priority"],
+            -match["word_count"],
+            -int(match["is_sentence"]),
+            str(match["policy"].get("id", "")),
+            match["target"],
+        ))
         return matches[0]["policy"]

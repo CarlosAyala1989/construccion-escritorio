@@ -122,19 +122,28 @@ async function showDashboard(user) {
 async function loadWorkspaces() {
     const workspaces = await eel.get_workspaces()();
     const grid = document.getElementById('workspaceGrid');
+    grid.replaceChildren();
 
     if (!workspaces || workspaces.length === 0) {
-        grid.innerHTML = '<p class="text-muted">No tienes espacios de trabajo asignados. Contacta al administrador.</p>';
+        const emptyMessage = document.createElement('p');
+        emptyMessage.className = 'text-muted';
+        emptyMessage.textContent = 'No tienes espacios de trabajo asignados. Contacta al administrador.';
+        grid.appendChild(emptyMessage);
         return;
     }
 
-    grid.innerHTML = workspaces.map(ws => `
-        <div class="workspace-item ${selectedWorkspaceId === ws.id ? 'selected' : ''}"
-             onclick="selectWorkspace('${ws.id}', '${ws.name}')">
-            <h3>${ws.name}</h3>
-            <p>${ws.cloudPath || 'Sin ruta'}</p>
-        </div>
-    `).join('');
+    workspaces.forEach(ws => {
+        const item = document.createElement('div');
+        item.className = `workspace-item${selectedWorkspaceId === ws.id ? ' selected' : ''}`;
+        item.addEventListener('click', () => selectWorkspace(ws.id, ws.name));
+
+        const title = document.createElement('h3');
+        title.textContent = ws.name || '';
+        const path = document.createElement('p');
+        path.textContent = ws.cloudPath || 'Sin ruta';
+        item.append(title, path);
+        grid.appendChild(item);
+    });
 
     // Añade el botón de inicio si hay un espacio seleccionado.
     if (selectedWorkspaceId) {
@@ -257,22 +266,22 @@ async function openScannerModal() {
     
     document.getElementById('scannerModal').classList.remove('hidden');
     const select = document.getElementById('scannerSelect');
-    select.innerHTML = '<option value="">Buscando dispositivos...</option>';
+    select.replaceChildren(createOption('', 'Buscando dispositivos...'));
     document.getElementById('btnConfirmScan').disabled = true;
 
     try {
         const scanners = await eel.get_scanners()();
         if (scanners && scanners.length > 0) {
-            select.innerHTML = scanners.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+            select.replaceChildren(...scanners.map(scanner => createOption(scanner.id, scanner.name)));
             // En Windows, se puede dejar vacío el selector para que WIA muestre su propio cuadro si el usuario lo prefiere.
-            select.innerHTML += '<option value="">Selección del sistema (por defecto)</option>';
+            select.appendChild(createOption('', 'Selección del sistema (por defecto)'));
             document.getElementById('btnConfirmScan').disabled = false;
         } else {
-            select.innerHTML = '<option value="">No se encontraron escáneres, intenta selección del sistema</option>';
+            select.replaceChildren(createOption('', 'No se encontraron escáneres, intenta selección del sistema'));
             document.getElementById('btnConfirmScan').disabled = false;
         }
     } catch (e) {
-        select.innerHTML = '<option value="">Error al buscar dispositivos</option>';
+        select.replaceChildren(createOption('', 'Error al buscar dispositivos'));
         document.getElementById('btnConfirmScan').disabled = false;
     }
 }
@@ -391,19 +400,26 @@ async function refreshSessionFiles() {
         updateCapturePauseState(status.capture_paused, status.pause_reason);
         const files = await eel.get_session_files()();
         const tbody = document.getElementById('filesTableBody');
+        tbody.replaceChildren();
 
         if (!files || files.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">No hay archivos en la sesión.</td></tr>';
+            tbody.appendChild(createEmptyTableRow(3, 'No hay archivos en la sesión.'));
             return;
         }
 
-        tbody.innerHTML = files.map(f => `
-            <tr>
-                <td>${f.name}</td>
-                <td>${formatSize(f.size)}</td>
-                <td><span class="badge badge-blue">${f.ext.toUpperCase()}</span></td>
-            </tr>
-        `).join('');
+        files.forEach(file => {
+            const row = document.createElement('tr');
+            row.appendChild(createTextCell(file.name));
+            row.appendChild(createTextCell(formatSize(file.size)));
+
+            const typeCell = document.createElement('td');
+            const typeBadge = document.createElement('span');
+            typeBadge.className = 'badge badge-blue';
+            typeBadge.textContent = String(file.ext || '').toUpperCase();
+            typeCell.appendChild(typeBadge);
+            row.appendChild(typeCell);
+            tbody.appendChild(row);
+        });
 
         updateDocCount(files.length);
     } catch (e) { /* Ignora los errores de actualización. */ }
@@ -414,24 +430,38 @@ async function refreshPendingReview() {
     try {
         const items = await eel.get_pending_review()();
         const tbody = document.getElementById('reviewTableBody');
+        tbody.replaceChildren();
 
         if (!items || items.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">No hay documentos pendientes.</td></tr>';
+            tbody.appendChild(createEmptyTableRow(3, 'No hay documentos pendientes.'));
             return;
         }
 
-        tbody.innerHTML = items.map(item => `
-            <tr>
-                <td>${item.original_name}</td>
-                <td><span class="text-muted">${item.error_message || 'Sin detalle'}</span></td>
-                <td>
-                    <button class="btn btn-sm btn-primary"
-                        onclick="openCorrection('${item.id}', '${item.original_name}', '${(item.error_message || '').replace(/'/g, '')}')">
-                        ✏️ Corregir
-                    </button>
-                </td>
-            </tr>
-        `).join('');
+        items.forEach(item => {
+            const row = document.createElement('tr');
+            row.appendChild(createTextCell(item.original_name));
+
+            const detailCell = document.createElement('td');
+            const detail = document.createElement('span');
+            detail.className = 'text-muted';
+            detail.textContent = item.error_message || 'Sin detalle';
+            detailCell.appendChild(detail);
+            row.appendChild(detailCell);
+
+            const actionCell = document.createElement('td');
+            const correctionButton = document.createElement('button');
+            correctionButton.type = 'button';
+            correctionButton.className = 'btn btn-sm btn-primary';
+            correctionButton.textContent = '✏️ Corregir';
+            correctionButton.addEventListener('click', () => openCorrection(
+                item.id,
+                item.original_name,
+                item.error_message || '',
+            ));
+            actionCell.appendChild(correctionButton);
+            row.appendChild(actionCell);
+            tbody.appendChild(row);
+        });
     } catch (e) { /* Ignora el error de actualización. */ }
 }
 
@@ -440,9 +470,10 @@ async function refreshQueue() {
     try {
         const items = await eel.get_queue_items()();
         const tbody = document.getElementById('queueTableBody');
+        tbody.replaceChildren();
 
         if (!items || items.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">Cola vacía.</td></tr>';
+            tbody.appendChild(createEmptyTableRow(4, 'Cola vacía.'));
             return;
         }
 
@@ -455,21 +486,47 @@ async function refreshQueue() {
             'ERROR': ['Error', 'badge-red'],
         };
 
-        tbody.innerHTML = items.map(item => {
+        items.forEach(item => {
             const [label, cls] = statusMap[item.status] || ['Desconocido', 'badge-yellow'];
-            return `
-                <tr>
-                    <td>${item.original_name}</td>
-                    <td><span class="badge ${cls}">${label}</span></td>
-                    <td>${item.workspace_name || '—'}</td>
-                    <td class="text-muted">${item.created_at || '—'}</td>
-                </tr>
-            `;
-        }).join('');
+            const row = document.createElement('tr');
+            row.appendChild(createTextCell(item.original_name));
+
+            const statusCell = document.createElement('td');
+            const statusBadge = document.createElement('span');
+            statusBadge.className = `badge ${cls}`;
+            statusBadge.textContent = label;
+            statusCell.appendChild(statusBadge);
+            row.appendChild(statusCell);
+            row.appendChild(createTextCell(item.workspace_name || '—'));
+            row.appendChild(createTextCell(item.created_at || '—', 'text-muted'));
+            tbody.appendChild(row);
+        });
     } catch (e) { /* Ignora el error de actualización. */ }
 }
 
 // ─── Funciones auxiliares ─────────────────────────────
+function createTextCell(value, className = '') {
+    const cell = document.createElement('td');
+    cell.className = className;
+    cell.textContent = value == null ? '' : String(value);
+    return cell;
+}
+
+function createEmptyTableRow(columnCount, message) {
+    const row = document.createElement('tr');
+    const cell = createTextCell(message, 'text-center text-muted');
+    cell.colSpan = columnCount;
+    row.appendChild(cell);
+    return row;
+}
+
+function createOption(value, label) {
+    const option = document.createElement('option');
+    option.value = value == null ? '' : String(value);
+    option.textContent = label == null ? '' : String(label);
+    return option;
+}
+
 function updateDocCount(count) {
     const el = document.getElementById('sessionDocCount');
     if (el) {
