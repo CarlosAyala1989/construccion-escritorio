@@ -25,6 +25,11 @@ async function checkStatus() {
     try {
         const status = await eel.get_app_status()();
         const badge = document.getElementById('statusBadge');
+        if (status && status.success === false) {
+            badge.textContent = 'Inicia sesión';
+            badge.className = 'status-badge status-offline';
+            return;
+        }
         if (status.online) {
             badge.textContent = 'Conectado';
             badge.className = 'status-badge status-online';

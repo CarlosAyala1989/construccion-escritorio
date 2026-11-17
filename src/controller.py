@@ -118,11 +118,31 @@ def _bucle_sincronizacion_segundo_plano():
 
 # RF-03 — Devuelve un error uniforme si falta el contexto requerido para capturar.
 def _obtener_fallo_proteccion_captura():
+    authentication_failure = _obtener_fallo_autenticacion()
+    if authentication_failure:
+        return authentication_failure
     try:
         exigir_contexto_captura_activo(db, capture_context)
         return None
     except ErrorContextoCaptura as error:
         return {"success": False, "error": str(error)}
+
+
+def _obtener_fallo_autenticacion():
+    """Devuelve una denegación uniforme para funciones Eel protegidas."""
+    if capture_context.user:
+        return None
+    return {"success": False, "error": "Debes iniciar sesión primero."}
+
+
+def _obtener_elementos_cola_espacio_actual(status=None):
+    """Revalida el espacio y limita la cola visible a su identificador."""
+    workspace = validar_espacio_seleccionado(db, capture_context)
+    items = db.get_queue_items(status=status)
+    return workspace, [
+        item for item in items
+        if item.get("workspace_id") == workspace.get("id")
+    ]
 
 
 # ─── Autenticación ────────────────────────────────────
@@ -324,6 +344,9 @@ def import_files(file_paths):
 @eel.expose
 def get_scanners():
     """Enumera los escáneres físicos disponibles."""
+    guard_failure = _obtener_fallo_proteccion_captura()
+    if guard_failure:
+        return guard_failure
     return scanner.get_scanners()
 
 
@@ -416,35 +439,68 @@ def pick_and_import_files():
 
 @eel.expose
 def export_files():
-    """Exporta los archivos procesados a un directorio elegido por el usuario."""
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes('-topmost', True)
+    """Exporta resultados del espacio activo sin atravesar otros contextos."""
+    guard_failure = _obtener_fallo_proteccion_captura()
+    if guard_failure:
+        return guard_failure
 
-        dest_dir = filedialog.askdirectory(
-            title="Seleccionar carpeta de destino para exportar"
-        )
-        root.destroy()
+    try:
+        workspace, queue_items = _obtener_elementos_cola_espacio_actual()
+        dest_dir = _seleccionar_directorio_exportacion()
 
         if not dest_dir:
             return {"success": True, "count": 0, "message": "No se seleccionó carpeta."}
 
-        import shutil
         exported = 0
-        for f in os.listdir(OUTPUT_DIR):
-            src = os.path.join(OUTPUT_DIR, f)
-            if os.path.isfile(src):
-                dest = os.path.join(dest_dir, f)
-                shutil.copy2(src, dest)
-                exported += 1
+        exported_paths = set()
+        output_root = os.path.realpath(OUTPUT_DIR)
+        for item in queue_items:
+            if item.get("status") not in {"PROCESSED", "UPLOADED"}:
+                continue
 
-        return {"success": True, "count": exported, "destination": dest_dir}
+            source_path = os.path.realpath(item.get("file_path") or "")
+            try:
+                is_managed_output = os.path.commonpath([output_root, source_path]) == output_root
+            except ValueError:
+                is_managed_output = False
+
+            if (
+                not is_managed_output
+                or source_path in exported_paths
+                or not os.path.isfile(source_path)
+            ):
+                continue
+
+            destination = os.path.join(dest_dir, os.path.basename(source_path))
+            shutil.copy2(source_path, destination)
+            exported_paths.add(source_path)
+            exported += 1
+
+        return {
+            "success": True,
+            "count": exported,
+            "destination": dest_dir,
+            "workspace_id": workspace["id"],
+        }
     except Exception as e:
         LOGGER.exception("Falló la exportación de archivos.")
         return {"success": False, "error": f"Error al exportar: {str(e)}"}
+
+
+def _seleccionar_directorio_exportacion():
+    """Abre el selector nativo y garantiza la destrucción de su ventana raíz."""
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    try:
+        root.withdraw()
+        root.attributes('-topmost', True)
+        return filedialog.askdirectory(
+            title="Seleccionar carpeta de destino para exportar"
+        )
+    finally:
+        root.destroy()
 
 
 @eel.expose
@@ -457,13 +513,21 @@ def get_session_files():
 @eel.expose
 def get_pending_review():
     """Devuelve los documentos que requieren revisión manual."""
-    return db.obtener_revision_pendiente()
+    try:
+        _, items = _obtener_elementos_cola_espacio_actual(status="PENDING_REVIEW")
+        return items
+    except ErrorContextoCaptura as error:
+        return {"success": False, "error": str(error)}
 
 
 @eel.expose
 def get_queue_items():
-    """Devuelve todos los elementos de la cola de procesamiento."""
-    return db.get_queue_items()
+    """Devuelve los elementos de cola visibles en el espacio seleccionado."""
+    try:
+        _, items = _obtener_elementos_cola_espacio_actual()
+        return items
+    except ErrorContextoCaptura as error:
+        return {"success": False, "error": str(error)}
 
 
 # RF-11 — Reevalúa el documento corregido antes de cambiar su estado de cola.
@@ -532,7 +596,19 @@ def correct_document(doc_id, new_name):
 @eel.expose
 def get_app_status():
     """Devuelve el estado general de la aplicación."""
+    guard_failure = _obtener_fallo_autenticacion()
+    if guard_failure:
+        return guard_failure
+
     online = db.esta_en_linea()
+    assigned_workspaces = db.obtener_espacios_usuario(capture_context.user["id"])
+    assigned_workspace_ids = {
+        workspace.get("id") for workspace in assigned_workspaces
+    }
+    offline_documents = [
+        item for item in db.get_queue_items(status="PROCESSED")
+        if item.get("workspace_id") in assigned_workspace_ids
+    ]
     return {
         "online": online,
         "user": capture_context.user,
@@ -544,7 +620,7 @@ def get_app_status():
         "capture_paused": scanner.is_paused,
         "pause_reason": scanner.pause_reason,
         "paused_files": len(scanner.memory_queue),
-        "offline_documents": len(db.get_queue_items(status="PROCESSED")),
+        "offline_documents": len(offline_documents),
     }
 
 
@@ -552,13 +628,24 @@ def get_app_status():
 @eel.expose
 def sync_now():
     """Inicia manualmente la misma sincronización de documentos y bitácoras que RF-13."""
-    result = _sincronizar_acumulado_sin_conexion()
-    return {"synced": result["logs"], "documents": result["documents"]}
+    try:
+        workspace = validar_espacio_seleccionado(db, capture_context)
+        result = _sincronizar_acumulado_sin_conexion(workspace_id=workspace["id"])
+        return {
+            "success": True,
+            "synced": result["logs"],
+            "documents": result["documents"],
+        }
+    except ErrorContextoCaptura as error:
+        return {"success": False, "error": str(error)}
 
 
 @eel.expose
 def get_config():
     """Devuelve la configuración del sistema."""
+    guard_failure = _obtener_fallo_autenticacion()
+    if guard_failure:
+        return guard_failure
     return db.get_config()
 
 
@@ -975,7 +1062,8 @@ def _subir_elemento_procesado(item, active_uploader, config):
 
 
 # RF-13/RF-17 — Sincroniza la cola de documentos y las bitácoras en un pase protegido.
-def _sincronizar_acumulado_sin_conexion():
+def _sincronizar_acumulado_sin_conexion(workspace_id=None):
+    """Sincroniza todo en segundo plano o solo un espacio en una solicitud manual."""
     if not db.esta_en_linea():
         return {"documents": 0, "logs": 0}
 
@@ -988,7 +1076,14 @@ def _sincronizar_acumulado_sin_conexion():
         active_uploader = CargadorNube(merged_config)
         uploaded = 0
 
-        for item in db.get_queue_items(status="PROCESSED"):
+        pending_items = db.get_queue_items(status="PROCESSED")
+        if workspace_id is not None:
+            pending_items = [
+                item for item in pending_items
+                if item.get("workspace_id") == workspace_id
+            ]
+
+        for item in pending_items:
             result = _subir_elemento_procesado(item, active_uploader, config)
             if not result.get("success"):
                 continue
