@@ -34,7 +34,8 @@ function Write-Step {
 function Invoke-Download {
     param(
         [Parameter(Mandatory = $true)][string]$Url,
-        [Parameter(Mandatory = $true)][string]$OutFile
+        [Parameter(Mandatory = $true)][string]$OutFile,
+        [Parameter(Mandatory = $true)][string]$ExpectedSha256
     )
 
     Write-Step "Descargando $Url"
@@ -68,6 +69,12 @@ function Invoke-Download {
 
     if (-not (Test-Path $TempFile) -or (Get-Item $TempFile).Length -eq 0) {
         throw "La descarga quedo vacia: $Url"
+    }
+
+    $ActualSha256 = (Get-FileHash -Algorithm SHA256 -Path $TempFile).Hash
+    if ($ActualSha256 -ne $ExpectedSha256) {
+        Remove-Item $TempFile -Force
+        throw "La descarga no coincide con el SHA-256 aprobado: $Url"
     }
 
     Move-Item -Force $TempFile $OutFile
@@ -159,7 +166,8 @@ function Install-PrivatePython {
     $Installer = Join-Path $DownloadsDir "python-3.12.10-amd64.exe"
     Invoke-Download `
         -Url "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe" `
-        -OutFile $Installer
+        -OutFile $Installer `
+        -ExpectedSha256 "67B5635E80EA51072B87941312D00EC8927C4DB9BA18938F7AD2D27B328B95FB"
 
     Write-Step "Instalando Python 3.12 local"
     $Args = @(
@@ -294,11 +302,12 @@ function Ensure-TesseractLanguage {
     if (-not (Test-Path $Spa)) {
         try {
             Invoke-Download `
-                -Url "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/spa.traineddata" `
-                -OutFile $Spa
+                -Url "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/87416418657359cb625c412a48b6e1d6d41c29bd/spa.traineddata" `
+                -OutFile $Spa `
+                -ExpectedSha256 "6F2E04D02774A18F01BED44B1111F2CD7F3BA7AC9DC4373CD3F898A40EA6B464"
         }
         catch {
-            Write-Step "Advertencia: no se pudo descargar spa.traineddata: $($_.Exception.Message)"
+            throw "No se pudo instalar el modelo OCR espanol verificado: $($_.Exception.Message)"
         }
     }
 }
@@ -349,7 +358,10 @@ function Install-Tesseract {
     $TesseractDownloaded = $false
     foreach ($Url in $TesseractUrls) {
         try {
-            Invoke-Download -Url $Url -OutFile $TesseractInstaller
+            Invoke-Download `
+                -Url $Url `
+                -OutFile $TesseractInstaller `
+                -ExpectedSha256 "F3FC4236425B690C8BE756F35793F77394EE004BE0A6460A440C754D892F68BC"
             if (Test-WindowsExecutable -Path $TesseractInstaller -MinimumBytes 10000000) {
                 $TesseractDownloaded = $true
                 break
@@ -365,8 +377,7 @@ function Install-Tesseract {
     }
 
     if (-not $TesseractDownloaded) {
-        Write-Step "Advertencia: no se pudo descargar un instalador valido de Tesseract OCR; la instalacion continuara sin OCR local"
-        return $null
+        throw "No se pudo instalar Tesseract OCR desde una fuente verificada"
     }
 
     $TesseractTarget = Join-Path $ToolsDir "Tesseract-OCR"
@@ -374,21 +385,18 @@ function Install-Tesseract {
         $Process = Start-Process -FilePath $TesseractInstaller -ArgumentList "/S /D=$TesseractTarget" -Wait -PassThru
     }
     catch {
-        Write-Step "Advertencia: no se pudo ejecutar el instalador de Tesseract OCR: $($_.Exception.Message)"
-        return $null
+        throw "No se pudo ejecutar el instalador verificado de Tesseract OCR: $($_.Exception.Message)"
     }
 
     Write-Step "Instalador de Tesseract OCR termino con codigo $($Process.ExitCode)"
     if ($Process.ExitCode -ne 0) {
-        Write-Step "Advertencia: el instalador de Tesseract OCR no termino correctamente"
-        return $null
+        throw "El instalador de Tesseract OCR no termino correctamente"
     }
 
     Write-Step "Esperando confirmacion de Tesseract OCR"
     $Existing = Wait-TesseractRoot -TimeoutSeconds 120
     if (-not $Existing) {
-        Write-Step "Advertencia: no se encontro Tesseract despues de instalarlo; la instalacion continuara sin OCR local"
-        return $null
+        throw "No se encontro Tesseract despues de instalarlo"
     }
 
     Ensure-TesseractLanguage $Existing
@@ -419,19 +427,15 @@ function Install-Poppler {
         return $Existing
     }
 
-    $ReleaseApi = "https://api.github.com/repos/oschwartz10612/poppler-windows/releases/latest"
-    Write-Step "Buscando ultima version de Poppler para Windows"
-    $Release = Invoke-RestMethod -Uri $ReleaseApi -Headers @{ "User-Agent" = "GobernanzaDocumentalInstaller" }
-    $Asset = $Release.assets |
-        Where-Object { $_.name -match "\.zip$" -and $_.name -match "Release" } |
-        Select-Object -First 1
-
-    if (-not $Asset) {
-        throw "No se encontro un ZIP de Poppler en la ultima release"
-    }
-
-    $ZipPath = Join-Path $DownloadsDir $Asset.name
-    Invoke-Download -Url $Asset.browser_download_url -OutFile $ZipPath
+    $PopplerVersion = "26.09.0-0"
+    $PopplerAsset = "Release-$PopplerVersion.zip"
+    $PopplerUrl = "https://github.com/oschwartz10612/poppler-windows/releases/download/v$PopplerVersion/$PopplerAsset"
+    $ZipPath = Join-Path $DownloadsDir $PopplerAsset
+    Write-Step "Descargando Poppler $PopplerVersion verificado"
+    Invoke-Download `
+        -Url $PopplerUrl `
+        -OutFile $ZipPath `
+        -ExpectedSha256 "7A6F256A0DDF7536182246A5733331BF4677CBCC34F4663774947AD34556C8D0"
 
     $PopplerRoot = Join-Path $ToolsDir "poppler"
     if (Test-Path $PopplerRoot) {

@@ -213,6 +213,8 @@ class AdministradorBaseDatos:
         """)
 
         self._cifrar_bitacoras_heredadas(c)
+        self._cifrar_cache_heredada(c)
+        self._cifrar_claves_cola_heredadas(c)
 
         conn.commit()
         conn.close()
@@ -246,6 +248,32 @@ class AdministradorBaseDatos:
                        workspace_id = NULL
                    WHERE id = ?""",
                 (encrypted_payload, values["id"]),
+            )
+
+    def _cifrar_cache_heredada(self, cursor):
+        """Migra la caché JSON histórica a sobres AES-GCM autenticados."""
+        rows = cursor.execute(
+            "SELECT key, value FROM cached_config WHERE value NOT LIKE ?",
+            ("DZENC1:%",),
+        ).fetchall()
+        for key, value in rows:
+            cursor.execute(
+                "UPDATE cached_config SET value = ? WHERE key = ?",
+                (cifrar_contenido_local(value), key),
+            )
+
+    def _cifrar_claves_cola_heredadas(self, cursor):
+        """Cifra contraseñas de cola antiguas que aún estuvieran en claro."""
+        rows = cursor.execute(
+            """SELECT id, encryption_password FROM local_queue
+               WHERE encryption_password IS NOT NULL
+                 AND encryption_password NOT LIKE ?""",
+            ("DZENC1:%",),
+        ).fetchall()
+        for item_id, password in rows:
+            cursor.execute(
+                "UPDATE local_queue SET encryption_password = ? WHERE id = ?",
+                (cifrar_contenido_local(password), item_id),
             )
 
     def obtener_sqlite(self):
@@ -667,6 +695,8 @@ class AdministradorBaseDatos:
         values = []
         for key, val in kwargs.items():
             sets.append(f"{key} = ?")
+            if key == "encryption_password" and val is not None:
+                val = cifrar_contenido_local(val)
             values.append(val)
         sets.append("updated_at = datetime('now')")
         values.append(doc_id)
@@ -683,7 +713,7 @@ class AdministradorBaseDatos:
             (doc_id,),
         ).fetchone()
         conn.close()
-        return dict(item) if item else None
+        return self._descifrar_elemento_cola(dict(item)) if item else None
 
     def get_queue_items(self, status=None):
         """Devuelve elementos de la cola, con filtro opcional por estado."""
@@ -697,7 +727,14 @@ class AdministradorBaseDatos:
                 "SELECT * FROM local_queue ORDER BY created_at DESC"
             ).fetchall()
         conn.close()
-        return [dict(i) for i in items]
+        return [self._descifrar_elemento_cola(dict(i)) for i in items]
+
+    @staticmethod
+    def _descifrar_elemento_cola(item):
+        password = item.get("encryption_password")
+        if es_contenido_local_cifrado(password):
+            item["encryption_password"] = descifrar_contenido_local(password)
+        return item
 
     # RF-08 — Limita la consulta a documentos que requieren revisión manual.
     def obtener_revision_pendiente(self):
@@ -749,10 +786,11 @@ class AdministradorBaseDatos:
     # ─── Ayudantes de caché ────────────────────────────
 
     def _guardar_cache(self, key, value):
+        encrypted_value = cifrar_contenido_local(value)
         conn = self.obtener_sqlite()
         conn.execute(
             "INSERT OR REPLACE INTO cached_config (key, value, updated_at) VALUES (?, ?, datetime('now'))",
-            (key, value)
+            (key, encrypted_value)
         )
         conn.commit()
         conn.close()
@@ -764,7 +802,10 @@ class AdministradorBaseDatos:
         conn.close()
         if row:
             try:
-                return json.loads(row["value"])
+                value = row["value"]
+                if es_contenido_local_cifrado(value):
+                    value = descifrar_contenido_local(value)
+                return json.loads(value)
             except (json.JSONDecodeError, TypeError):
-                return row["value"]
+                return value
         return default

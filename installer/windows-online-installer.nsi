@@ -66,8 +66,6 @@ Section "Instalar"
     File "${STAGING_DIR}/GobernanzaDocumental.exe"
 
     CreateDirectory "$INSTDIR\data"
-    CopyFiles /SILENT "$INSTDIR\installer\app.env" "$INSTDIR\data\.env"
-
     DetailPrint "Instalando Python, dependencias, OCR y Poppler..."
     nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\installer\bootstrap-windows.ps1" -InstallRoot "$INSTDIR"'
     Pop $0

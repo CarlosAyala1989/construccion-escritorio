@@ -16,8 +16,6 @@ LEGACY_OUT_FILE="${PROJECT_ROOT}/dist/windows/GobernanzaDocumentalSetup.exe"
 rm -rf "${STAGING_DIR}"
 mkdir -p "${STAGING_DIR}/app" "${STAGING_DIR}/installer" "${PROJECT_ROOT}/dist/windows"
 
-python3 scripts/prepare-installer-env.py
-
 cp main.py requirements.txt "${STAGING_DIR}/app/"
 cp -R src web "${STAGING_DIR}/app/"
 mkdir -p "${STAGING_DIR}/app/data/templates"
@@ -29,7 +27,6 @@ find "${STAGING_DIR}/app" -type d -name __pycache__ -prune -exec rm -rf {} +
 find "${STAGING_DIR}/app" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 
 cp installer/bootstrap-windows.ps1 "${STAGING_DIR}/installer/"
-cp installer/.env "${STAGING_DIR}/installer/app.env"
 
 if command -v makensis >/dev/null 2>&1; then
     MAKENSIS="$(command -v makensis)"
