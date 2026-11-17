@@ -379,6 +379,10 @@ class AdministradorBaseDatos:
 
         cursor = None
         try:
+            # La conexión se reutiliza por hilo y mysql-connector inicia
+            # transacciones de lectura. Cierra cualquier snapshot anterior
+            # para que una revocación confirmada por la web sea visible ya.
+            conn.rollback()
             cursor = conn.cursor(dictionary=True)
             cursor.execute(
                 """
