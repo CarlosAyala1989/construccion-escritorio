@@ -1,4 +1,8 @@
 # Script auxiliar para generar o preparar el instalador de Windows.
+param(
+    [string]$PyInstallerVersion = "6.16.0"
+)
+
 $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
@@ -17,7 +21,7 @@ if (-not (Test-Path $PythonExe)) {
 
 & $PythonExe -m pip install --upgrade pip wheel setuptools
 & $PythonExe -m pip install -r requirements.txt
-& $PythonExe -m pip install pyinstaller
+& $PythonExe -m pip install "pyinstaller==$PyInstallerVersion"
 
 if (Test-Path "build") {
     Remove-Item "build" -Recurse -Force

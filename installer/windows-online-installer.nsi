@@ -93,5 +93,14 @@ Section "Uninstall"
     Delete "$DESKTOP\Gobernanza Documental.lnk"
     RMDir /r "$SMPROGRAMS\Gobernanza Documental"
     DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\GobernanzaDocumental"
-    RMDir /r "$INSTDIR"
+    ; Conserva datos, colas, bitácoras y configuración local del usuario.
+    ; Su eliminación debe ser una acción separada y explícita, nunca un efecto
+    ; colateral de desinstalar la aplicación.
+    RMDir /r "$INSTDIR\app"
+    RMDir /r "$INSTDIR\installer"
+    Delete "$INSTDIR\GobernanzaDocumental.exe"
+    Delete "$INSTDIR\Uninstall.exe"
+    RMDir "$INSTDIR"
+    IfFileExists "$INSTDIR\data\*.*" 0 +2
+        MessageBox MB_ICONINFORMATION|MB_OK "La aplicación fue desinstalada. Los datos locales se conservaron en:$\r$\n$INSTDIR\data"
 SectionEnd
