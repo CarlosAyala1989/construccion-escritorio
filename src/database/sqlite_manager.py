@@ -23,6 +23,7 @@ from src.core.local_crypto import (
     cifrar_contenido_local,
     es_contenido_local_cifrado,
 )
+from src.database.mysql_secrets import descifrar_campo_secreto
 
 # Rutas locales
 REPO_ROOT = os.path.dirname(BASE_DIR)
@@ -352,7 +353,10 @@ class AdministradorBaseDatos:
                 "Solicita al administrador activarlo."
             )
 
-        if not _verificar_codigo_totp(user["twoFactorSecret"], totp_code):
+        totp_secret = descifrar_campo_secreto(
+            "User", "twoFactorSecret", user["id"], user["twoFactorSecret"]
+        )
+        if not _verificar_codigo_totp(totp_secret, totp_code):
             raise ErrorAutenticacion("Código de Authenticator inválido o vencido.")
 
         return {
@@ -446,6 +450,13 @@ class AdministradorBaseDatos:
                 cursor.close()
 
         # Guarda los datos en caché para usarlos sin conexión.
+        for workspace in workspaces:
+            workspace["defaultPassword"] = descifrar_campo_secreto(
+                "Workspace", "defaultPassword", workspace["id"], workspace.get("defaultPassword")
+            )
+            workspace["cloudRefreshToken"] = descifrar_campo_secreto(
+                "Workspace", "cloudRefreshToken", workspace["id"], workspace.get("cloudRefreshToken")
+            )
         self._guardar_cache("workspaces", json.dumps(workspaces))
         return workspaces
 
@@ -469,6 +480,12 @@ class AdministradorBaseDatos:
                 )
                 workspace = cursor.fetchone()
                 if workspace:
+                    workspace["defaultPassword"] = descifrar_campo_secreto(
+                        "Workspace", "defaultPassword", workspace["id"], workspace.get("defaultPassword")
+                    )
+                    workspace["cloudRefreshToken"] = descifrar_campo_secreto(
+                        "Workspace", "cloudRefreshToken", workspace["id"], workspace.get("cloudRefreshToken")
+                    )
                     return workspace
             except mysql.connector.Error as error:
                 logging.getLogger(__name__).warning("Falló la consulta del espacio; se usará caché: %s", error)
@@ -511,6 +528,10 @@ class AdministradorBaseDatos:
             if cursor:
                 cursor.close()
 
+        for policy in policies:
+            policy["password"] = descifrar_campo_secreto(
+                "SecurityPolicy", "password", policy["id"], policy.get("password")
+            )
         self._guardar_cache("policies", json.dumps(policies))
         return policies
 
@@ -546,6 +567,9 @@ class AdministradorBaseDatos:
                 cursor.close()
 
         if config:
+            config["cloudCredentials"] = descifrar_campo_secreto(
+                "Config", "cloudCredentials", config["id"], config.get("cloudCredentials")
+            )
             # Convierte valores booleanos.
             config["compressionEnabled"] = bool(config.get("compressionEnabled", 0))
             config["deleteLocalAfterUpload"] = bool(config.get("deleteLocalAfterUpload", 0))
