@@ -45,11 +45,19 @@ class ClienteAPISaaS:
     # RF-17 — Informa una subida y devuelve si el backend la aceptó.
     def informar_subida(self, upload_data):
         """Informa al servicio SaaS que la carga de un documento fue exitosa."""
+        operation_id = upload_data.get("operationId") or upload_data.get("id")
+        if not operation_id:
+            logging.getLogger(__name__).warning(
+                "No se reportó la subida porque carece de un identificador estable."
+            )
+            return False
+        payload = dict(upload_data)
+        payload["operationId"] = operation_id
         try:
             resp = requests.post(
                 f"{self.base_url}/api/sync/upload",
                 headers=self._cabeceras(),
-                json=upload_data,
+                json=payload,
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
             return resp.status_code == HTTP_CREATED
@@ -60,11 +68,22 @@ class ClienteAPISaaS:
     # RF-17 — Sincroniza el lote de bitácoras y devuelve el resultado al llamador.
     def sincronizar_bitacoras(self, logs):
         """Envía un lote de bitácoras de auditoría al servicio SaaS."""
+        payload_logs = []
+        for log in logs:
+            operation_id = log.get("operationId") or log.get("id")
+            if not operation_id:
+                logging.getLogger(__name__).warning(
+                    "No se sincronizó el lote porque una bitácora carece de identificador estable."
+                )
+                return False
+            payload_log = dict(log)
+            payload_log["operationId"] = operation_id
+            payload_logs.append(payload_log)
         try:
             resp = requests.post(
                 f"{self.base_url}/api/sync/logs",
                 headers=self._cabeceras(),
-                json={"logs": logs},
+                json={"logs": payload_logs},
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
             return resp.status_code == HTTP_CREATED

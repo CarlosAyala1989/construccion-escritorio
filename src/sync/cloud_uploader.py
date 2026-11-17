@@ -9,7 +9,10 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
+import time
+import uuid
 from src.app_paths import CLOUD_OUTPUT_DIR, PROCESSED_DIR, asegurar_directorios_ejecucion
 
 try:
@@ -30,6 +33,7 @@ GOOGLE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
 GOOGLE_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files"
 GOOGLE_FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
 DRIVE_SHA256_PROPERTY = "sha256"
+DRIVE_OPERATION_PROPERTY = "docuzenOperationId"
 GOOGLE_API_TIMEOUT_SECONDS = 30
 HTTP_OK = 200
 HTTP_CREATED = 201
@@ -40,6 +44,8 @@ SHA256_CHUNK_SIZE = 1024 * 1024
 FIRST_COLLISION_VERSION = 2
 DEFAULT_COMPRESSION_THRESHOLD_MB = 10
 BYTES_PER_MEGABYTE = 1024 * 1024
+OPERATION_MARKER_DIRECTORY = ".docuzen-operations"
+OPERATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
 class CargadorNube:
@@ -52,29 +58,52 @@ class CargadorNube:
         self.config = config or {}
 
     # RF-13 — Valida el origen y delega la subida según el proveedor configurado.
-    def upload(self, file_path, cloud_path, workspace_name=None, workspace=None):
+    def upload(
+        self,
+        file_path,
+        cloud_path,
+        workspace_name=None,
+        workspace=None,
+        operation_id=None,
+    ):
         """
         Carga un archivo en el destino de nube.
         Para Google Drive, `workspace` debe incluir cloudFolderId y cloudRefreshToken.
         """
         if not os.path.isfile(file_path):
             return {"success": False, "error": f"Archivo no encontrado: {file_path}", "provider": "NONE"}
+        if operation_id is not None and not OPERATION_ID_PATTERN.fullmatch(str(operation_id)):
+            return {
+                "success": False,
+                "error": "El identificador estable de la operación no es válido.",
+                "provider": "NONE",
+            }
 
         # Determina el proveedor a partir de cloudPath.
         if cloud_path.startswith("Google Drive:"):
-            return self._subir_drive(file_path, workspace)
+            return self._subir_drive(file_path, workspace, operation_id=operation_id)
         elif cloud_path.startswith("Dropbox:"):
             return self._subir_dropbox(file_path, cloud_path)
         elif cloud_path.startswith("LOCAL:"):
             local_dest = cloud_path.replace("LOCAL:", "").strip()
-            return self._subir_destino_local(file_path, local_dest, workspace_name)
+            return self._subir_destino_local(
+                file_path,
+                local_dest,
+                workspace_name,
+                operation_id=operation_id,
+            )
         else:
-            return self._subir_local(file_path, cloud_path, workspace_name)
+            return self._subir_local(
+                file_path,
+                cloud_path,
+                workspace_name,
+                operation_id=operation_id,
+            )
 
     # ─── Carga en Google Drive ───────────────────────
 
     # RF-13 — Renueva credenciales, organiza carpetas y devuelve el resultado de Drive.
-    def _subir_drive(self, file_path, workspace):
+    def _subir_drive(self, file_path, workspace, operation_id=None):
         """Carga un archivo en Google Drive con el token y el ID de carpeta guardados."""
         if not HAS_REQUESTS:
             return {"success": False, "error": "Librería 'requests' no disponible", "provider": "GOOGLE_DRIVE"}
@@ -137,12 +166,31 @@ class CargadorNube:
                 folder_parts,
                 access_token,
             )
+            if operation_id:
+                existing = self._buscar_archivo_por_operacion_drive(
+                    target_folder_id,
+                    operation_id,
+                    access_token,
+                )
+                if existing:
+                    drive_path = "/".join(folder_parts + [existing.get("name") or filename])
+                    return {
+                        "success": True,
+                        "destination": f"Google Drive: {drive_path}",
+                        "drive_file_id": existing["id"],
+                        "sha256": sha256,
+                        "provider": "GOOGLE_DRIVE",
+                        "duplicate": True,
+                        "operation_id": operation_id,
+                    }
             # Prepara los metadatos del archivo.
             metadata = {
                 "name": filename,
                 "parents": [target_folder_id],
                 "appProperties": {DRIVE_SHA256_PROPERTY: sha256},
             }
+            if operation_id:
+                metadata["appProperties"][DRIVE_OPERATION_PROPERTY] = operation_id
 
             # Usa carga multipart para archivos pequeños y reanudable para los grandes.
             if file_size < SMALL_UPLOAD_MAX_BYTES:
@@ -164,6 +212,8 @@ class CargadorNube:
                     "drive_file_id": result["id"],
                     "sha256": sha256,
                     "provider": "GOOGLE_DRIVE",
+                    "duplicate": False,
+                    "operation_id": operation_id,
                 }
             else:
                 return {
@@ -191,6 +241,34 @@ class CargadorNube:
                 access_token,
             )
         return current_folder_id
+
+    def _buscar_archivo_por_operacion_drive(self, parent_id, operation_id, access_token):
+        """Recupera el resultado remoto de una operación ya confirmada por Drive."""
+        escaped_parent = self._escapar_valor_consulta_drive(parent_id)
+        escaped_operation = self._escapar_valor_consulta_drive(operation_id)
+        query = (
+            f"'{escaped_parent}' in parents and "
+            f"appProperties has {{ key='{DRIVE_OPERATION_PROPERTY}' and "
+            f"value='{escaped_operation}' }} and trashed = false"
+        )
+        response = http_requests.get(
+            GOOGLE_FILES_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={
+                "q": query,
+                "fields": "files(id,name,appProperties)",
+                "pageSize": 1,
+                "supportsAllDrives": "true",
+                "includeItemsFromAllDrives": "true",
+            },
+            timeout=GOOGLE_API_TIMEOUT_SECONDS,
+        )
+        if response.status_code != HTTP_OK:
+            raise RuntimeError(
+                "No se pudo comprobar la idempotencia de la carga en Google Drive."
+            )
+        files = response.json().get("files", [])
+        return files[0] if files else None
 
     # RF-13 — Busca una carpeta hija existente para mantener la estructura remota.
     def _buscar_carpeta_drive(self, parent_id, folder_name, access_token):
@@ -443,7 +521,13 @@ class CargadorNube:
     # ─── Carga en destino local ──────────────────────
 
     # RF-13 — Copia el archivo al destino local y devuelve el resultado estructurado.
-    def _subir_destino_local(self, file_path, dest_path, workspace_name=None):
+    def _subir_destino_local(
+        self,
+        file_path,
+        dest_path,
+        workspace_name=None,
+        operation_id=None,
+    ):
         """Copia el archivo en una ruta de destino local específica."""
         # Expande ~ como la ruta del directorio personal.
         dest_path = os.path.expanduser(dest_path)
@@ -454,20 +538,59 @@ class CargadorNube:
             output_dir = dest_path
 
         relative_path = self._ruta_relativa_procesado(file_path)
-        dest = os.path.join(output_dir, relative_path)
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        dest = self._evitar_colision(dest)
+        requested_dest = os.path.join(output_dir, relative_path)
+        os.makedirs(os.path.dirname(requested_dest), exist_ok=True)
+        source_sha256 = self._calcular_sha256(file_path)
+        try:
+            dest, duplicate = self._reservar_destino_operacion(
+                output_dir,
+                requested_dest,
+                operation_id,
+                source_sha256,
+            )
+        except OSError as error:
+            return {"success": False, "error": str(error), "provider": "LOCAL"}
+        if duplicate:
+            return {
+                "success": True,
+                "destination": dest,
+                "provider": "LOCAL",
+                "sha256": source_sha256,
+                "duplicate": True,
+                "operation_id": operation_id,
+            }
 
         try:
             shutil.copy2(file_path, dest)
+            if self._calcular_sha256(dest) != source_sha256:
+                raise OSError("La copia local no coincide con la huella del archivo fuente.")
+            self._confirmar_destino_operacion(
+                output_dir,
+                operation_id,
+                dest,
+                source_sha256,
+            )
             logging.getLogger(__name__).info("Archivo copiado al destino local: %s", dest)
-            return {"success": True, "destination": dest, "provider": "LOCAL"}
+            return {
+                "success": True,
+                "destination": dest,
+                "provider": "LOCAL",
+                "sha256": source_sha256,
+                "duplicate": False,
+                "operation_id": operation_id,
+            }
         except OSError as error:
             logging.getLogger(__name__).exception("No se pudo copiar el archivo al destino local.")
             return {"success": False, "error": str(error), "provider": "LOCAL"}
 
     # RF-13 — Copia al directorio local de salida y devuelve un resultado reintentable.
-    def _subir_local(self, file_path, cloud_path, workspace_name=None):
+    def _subir_local(
+        self,
+        file_path,
+        cloud_path,
+        workspace_name=None,
+        operation_id=None,
+    ):
         """Copia el archivo en una carpeta local que simula una carga a la nube."""
         asegurar_directorios_ejecucion()
 
@@ -481,16 +604,45 @@ class CargadorNube:
             output_dir = output_base
 
         relative_path = self._ruta_relativa_procesado(file_path)
-        dest = os.path.join(output_dir, relative_path)
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        dest = self._evitar_colision(dest)
-
+        requested_dest = os.path.join(output_dir, relative_path)
+        os.makedirs(os.path.dirname(requested_dest), exist_ok=True)
+        source_sha256 = self._calcular_sha256(file_path)
         try:
-            shutil.copy2(file_path, dest)
+            dest, duplicate = self._reservar_destino_operacion(
+                output_dir,
+                requested_dest,
+                operation_id,
+                source_sha256,
+            )
+        except OSError as error:
+            return {"success": False, "error": str(error), "provider": "LOCAL"}
+        if duplicate:
             return {
                 "success": True,
                 "destination": dest,
                 "provider": "LOCAL",
+                "sha256": source_sha256,
+                "duplicate": True,
+                "operation_id": operation_id,
+            }
+
+        try:
+            shutil.copy2(file_path, dest)
+            if self._calcular_sha256(dest) != source_sha256:
+                raise OSError("La copia local no coincide con la huella del archivo fuente.")
+            self._confirmar_destino_operacion(
+                output_dir,
+                operation_id,
+                dest,
+                source_sha256,
+            )
+            return {
+                "success": True,
+                "destination": dest,
+                "provider": "LOCAL",
+                "sha256": source_sha256,
+                "duplicate": False,
+                "operation_id": operation_id,
             }
         except OSError as error:
             logging.getLogger(__name__).exception("No se pudo copiar el archivo al directorio de salida.")
@@ -507,6 +659,109 @@ class CargadorNube:
             "error": "La carga a Dropbox aún no está implementada. Usa la carga manual.",
             "provider": "DROPBOX",
         }
+
+    def _ruta_marcador_operacion(self, output_dir, operation_id):
+        if not operation_id:
+            return None
+        marker_name = hashlib.sha256(operation_id.encode("utf-8")).hexdigest() + ".json"
+        return os.path.join(output_dir, OPERATION_MARKER_DIRECTORY, marker_name)
+
+    def _leer_marcador_operacion(self, marker_path):
+        for _ in range(20):
+            try:
+                with open(marker_path, "r", encoding="utf-8") as marker:
+                    return json.load(marker)
+            except (FileNotFoundError, json.JSONDecodeError):
+                time.sleep(0.01)
+        raise OSError("No se pudo leer la reserva durable de la operación.")
+
+    def _reservar_destino_operacion(
+        self,
+        output_dir,
+        requested_dest,
+        operation_id,
+        source_sha256,
+    ):
+        if not operation_id:
+            return self._evitar_colision(requested_dest), False
+
+        marker_path = self._ruta_marcador_operacion(output_dir, operation_id)
+        os.makedirs(os.path.dirname(marker_path), exist_ok=True)
+        try:
+            descriptor = os.open(
+                marker_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+        except FileExistsError:
+            marker = self._leer_marcador_operacion(marker_path)
+            destination = marker.get("destination", "")
+            if marker.get("operation_id") != operation_id:
+                raise OSError("La reserva de operación no coincide con su identificador.")
+            if marker.get("sha256") != source_sha256:
+                raise OSError("La operación ya existe para un contenido diferente.")
+            if os.path.isfile(destination):
+                if self._calcular_sha256(destination) != source_sha256:
+                    raise OSError("El resultado reservado no conserva la integridad esperada.")
+                self._confirmar_destino_operacion(
+                    output_dir,
+                    operation_id,
+                    destination,
+                    source_sha256,
+                )
+                return destination, True
+            if marker.get("state") == "PENDING":
+                for _ in range(50):
+                    time.sleep(0.02)
+                    if os.path.isfile(destination):
+                        if self._calcular_sha256(destination) != source_sha256:
+                            raise OSError(
+                                "El resultado concurrente no conserva la integridad esperada."
+                            )
+                        self._confirmar_destino_operacion(
+                            output_dir,
+                            operation_id,
+                            destination,
+                            source_sha256,
+                        )
+                        return destination, True
+            return destination, False
+
+        destination = self._evitar_colision(requested_dest)
+        marker = {
+            "operation_id": operation_id,
+            "sha256": source_sha256,
+            "destination": destination,
+            "state": "PENDING",
+        }
+        with os.fdopen(descriptor, "w", encoding="utf-8") as marker_file:
+            json.dump(marker, marker_file, ensure_ascii=False, sort_keys=True)
+            marker_file.flush()
+            os.fsync(marker_file.fileno())
+        return destination, False
+
+    def _confirmar_destino_operacion(
+        self,
+        output_dir,
+        operation_id,
+        destination,
+        source_sha256,
+    ):
+        if not operation_id:
+            return
+        marker_path = self._ruta_marcador_operacion(output_dir, operation_id)
+        completed = {
+            "operation_id": operation_id,
+            "sha256": source_sha256,
+            "destination": destination,
+            "state": "COMPLETE",
+        }
+        temporary_path = f"{marker_path}.{uuid.uuid4().hex}.tmp"
+        with open(temporary_path, "w", encoding="utf-8") as marker:
+            json.dump(completed, marker, ensure_ascii=False, sort_keys=True)
+            marker.flush()
+            os.fsync(marker.fileno())
+        os.replace(temporary_path, marker_path)
 
     # ─── Utilidades ──────────────────────────────────
 

@@ -1042,6 +1042,7 @@ def _subir_elemento_procesado(item, active_uploader, config):
         workspace.get("cloudPath", ""),
         item.get("workspace_name") or workspace.get("name") or "default",
         workspace=workspace,
+        operation_id=item["id"],
     )
 
     if upload_result.get("success"):
