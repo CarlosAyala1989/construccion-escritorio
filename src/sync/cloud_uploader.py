@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import shutil
+import threading
 import time
 import uuid
 from src.app_paths import CLOUD_OUTPUT_DIR, PROCESSED_DIR, asegurar_directorios_ejecucion
@@ -56,6 +57,7 @@ class CargadorNube:
 
     def __init__(self, config=None):
         self.config = config or {}
+        self._local_operation_lock = threading.RLock()
 
     # RF-13 — Valida el origen y delega la subida según el proveedor configurado.
     def upload(
@@ -86,19 +88,21 @@ class CargadorNube:
             return self._subir_dropbox(file_path, cloud_path)
         elif cloud_path.startswith("LOCAL:"):
             local_dest = cloud_path.replace("LOCAL:", "").strip()
-            return self._subir_destino_local(
-                file_path,
-                local_dest,
-                workspace_name,
-                operation_id=operation_id,
-            )
+            with self._local_operation_lock:
+                return self._subir_destino_local(
+                    file_path,
+                    local_dest,
+                    workspace_name,
+                    operation_id=operation_id,
+                )
         else:
-            return self._subir_local(
-                file_path,
-                cloud_path,
-                workspace_name,
-                operation_id=operation_id,
-            )
+            with self._local_operation_lock:
+                return self._subir_local(
+                    file_path,
+                    cloud_path,
+                    workspace_name,
+                    operation_id=operation_id,
+                )
 
     # ─── Carga en Google Drive ───────────────────────
 
